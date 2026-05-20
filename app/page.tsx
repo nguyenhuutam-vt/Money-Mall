@@ -1,9 +1,18 @@
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
 async function checkSupabaseConnection() {
-  const { error } = await supabase
+  const configError = getSupabaseConfigError();
+
+  if (configError) {
+    return {
+      isConnected: false,
+      message: "Chưa cấu hình Supabase"
+    };
+  }
+
+  const { error } = await getSupabaseClient()
     .from("transactions")
     .select("id", { count: "exact", head: true });
 

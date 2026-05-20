@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -51,11 +51,20 @@ function transactionTypeBadgeClass(type: Transaction["transaction_type"]) {
 }
 
 async function getMonthlyTransactions() {
+  const configError = getSupabaseConfigError();
+
+  if (configError) {
+    return {
+      data: null,
+      error: new Error(configError)
+    };
+  }
+
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-  return supabase
+  return getSupabaseClient()
     .from("transactions")
     .select(
       "id, transaction_time, amount, transaction_type, receiver_name, category, description"

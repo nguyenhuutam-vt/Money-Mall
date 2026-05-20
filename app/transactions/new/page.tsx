@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 
 export default function NewTransactionPage() {
   const router = useRouter();
@@ -19,6 +19,7 @@ export default function NewTransactionPage() {
     const transactionTime = String(formData.get("transaction_time"));
     const transactionType =
       formData.get("transaction_type") === "income" ? "income" : "expense";
+    const configError = getSupabaseConfigError();
 
     if (!amount || !transactionTime) {
       setErrorMessage("Vui lòng nhập số tiền và thời gian giao dịch.");
@@ -26,7 +27,13 @@ export default function NewTransactionPage() {
       return;
     }
 
-    const { error } = await supabase.from("transactions").insert({
+    if (configError) {
+      setErrorMessage("Chưa cấu hình Supabase. Vui lòng kiểm tra biến môi trường.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const { error } = await getSupabaseClient().from("transactions").insert({
       amount,
       transaction_time: new Date(transactionTime).toISOString(),
       receiver_name: String(formData.get("receiver_name") || ""),

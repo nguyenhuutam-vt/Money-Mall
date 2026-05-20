@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 
 type Transaction = {
   id: string | number;
@@ -71,7 +71,15 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     async function fetchTransactions() {
-      const { data, error } = await supabase
+      const configError = getSupabaseConfigError();
+
+      if (configError) {
+        setErrorMessage("Chưa cấu hình Supabase. Vui lòng kiểm tra biến môi trường.");
+        setIsLoading(false);
+        return;
+      }
+
+      const { data, error } = await getSupabaseClient()
         .from("transactions")
         .select(
           "id, transaction_time, amount, transaction_type, receiver_name, receiver_bank, category, description"
