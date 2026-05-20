@@ -1,0 +1,131 @@
+You are helping me build "Expense Mail App", a Vietnamese expense management app.
+
+Project goal:
+- MVP app for tracking personal expenses.
+- First version supports manual transaction tracking.
+- Later versions will connect to Gmail via OAuth, read bank transfer receipt emails, extract transaction data, and show spending insights.
+
+Tech stack:
+- Next.js App Router
+- TypeScript
+- Tailwind CSS
+- Supabase later
+- Gmail API later
+
+Main working style:
+- Be concise.
+- Focus on the exact task requested.
+- Do not over-explain.
+- Do not generate long answers unless necessary.
+- Before editing, understand the existing code first.
+- Think carefully before making changes.
+- Prefer the smallest correct change.
+- Avoid unnecessary refactors.
+- Avoid changing unrelated files.
+- Do not rewrite entire files unless it is clearly better.
+- Do not create new components, hooks, utilities, or files unless they are truly needed.
+- Reuse existing code, styles, components, and patterns whenever possible.
+- Keep the app simple, maintainable, and beginner-friendly.
+
+Token-saving rules:
+- Do not describe every line of code.
+- Do not repeat the user's request.
+- Do not include long summaries.
+- Give only the important explanation after changes.
+- When suggesting a plan, keep it short and actionable.
+- If the task is small, directly implement it.
+- If there are multiple approaches, choose the simplest practical one instead of listing many options.
+
+Architecture rules:
+- Prioritize MVP over perfect architecture.
+- Keep files small but do not split too early.
+- Do not over-engineer.
+- Do not add abstractions before they are needed.
+- Do not add libraries unless necessary.
+- Use built-in Next.js, React, TypeScript, and Tailwind features first.
+- Use server components by default when possible.
+- Use client components only when interactivity is required.
+- Keep business logic separated from UI only when it improves clarity.
+- Avoid premature optimization, but write clean and scalable code.
+
+UI rules:
+- Design should feel modern, soft, clean, and fintech-like.
+- Preferred colors:
+  - white
+  - emerald green
+  - mint green
+  - light green background
+  - subtle gray text
+- Use rounded corners, soft shadows, smooth transitions, and clean spacing.
+- Avoid heavy dark UI unless requested.
+- Use Tailwind CSS only.
+- Do not add animation libraries unless requested.
+- Use subtle CSS/Tailwind animations only.
+- Keep responsive design in mind.
+
+Code quality rules:
+- Use TypeScript properly.
+- Avoid `any` unless absolutely necessary.
+- Use clear variable names.
+- Keep functions small and readable.
+- Avoid duplicated logic.
+- Reuse existing types where possible.
+- Add simple error handling.
+- Keep validation simple.
+- Do not leave dead code, unused imports, or console logs.
+- Do not introduce complex state management unless needed.
+
+Data rules:
+- Transaction data should be normalized.
+- A transaction should support:
+  - amount
+  - currency
+  - transaction_time
+  - bank_name
+  - sender_name
+  - sender_account
+  - receiver_name
+  - receiver_account
+  - receiver_bank
+  - description
+  - category
+  - fee
+  - gmail_message_id
+  - raw_text
+- Do not store sensitive passwords.
+- Never ask users for Gmail password or bank password.
+- Gmail access must use OAuth only.
+
+Parser rules for later:
+- Use one parser per bank.
+- Start with Vietcombank first.
+- Prefer simple regex/rule-based parsing before AI extraction.
+- Keep parsers testable and predictable.
+- Do not mix Gmail fetching logic with receipt parsing logic.
+
+Supabase rules for later:
+- Do not hardcode keys.
+- Use environment variables.
+- Keep database access simple.
+- Avoid complex RLS policies during early local MVP unless requested.
+- Later, user-specific data must be protected by auth and RLS.
+
+When implementing a task:
+1. Inspect existing files first.
+2. Identify the smallest set of files to change.
+3. Reuse existing code if possible.
+4. Implement only the requested feature.
+5. Check for TypeScript and lint errors.
+6. Briefly explain what changed and how to test it.
+
+When unsure:
+- Make a reasonable assumption if the issue is minor.
+- Ask one short clarification question only if the decision blocks progress.
+- Do not create a large feature based on assumptions.
+
+Important:
+- Do not automatically add Supabase unless I ask.
+- Do not automatically add Gmail API unless I ask.
+- Do not automatically add authentication unless I ask.
+- Do not create dashboards, charts, or parsers unless I ask.
+- Always keep the current milestone focused.

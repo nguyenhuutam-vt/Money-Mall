@@ -1,3 +1,25 @@
+import { supabase } from "@/lib/supabase";
+
+export const dynamic = "force-dynamic";
+
+async function checkSupabaseConnection() {
+  const { error } = await supabase
+    .from("transactions")
+    .select("id", { count: "exact", head: true });
+
+  if (error) {
+    return {
+      isConnected: false,
+      message: "Không thể kết nối Supabase"
+    };
+  }
+
+  return {
+    isConnected: true,
+    message: "Đã kết nối Supabase"
+  };
+}
+
 const features = [
   {
     title: "Ghi giao dịch thủ công",
@@ -76,7 +98,9 @@ const roadmap = [
   }
 ];
 
-export default function Home() {
+export default async function Home() {
+  const supabaseStatus = await checkSupabaseConnection();
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_18%_8%,#bbf7d0_0,transparent_30%),radial-gradient(circle_at_82%_18%,#ccfbf1_0,transparent_28%),linear-gradient(135deg,#f0fdf4_0%,#ffffff_46%,#ecfdf5_100%)]">
       <div className="pointer-events-none absolute inset-0 bg-soft-grid opacity-70" />
@@ -114,16 +138,16 @@ export default function Home() {
 
             <div className="mt-9 flex flex-col gap-3 sm:flex-row animate-fade-up animation-delay-500">
               <a
-                href="#preview"
+                href="/transactions/new"
                 className="rounded-full bg-gradient-to-r from-emerald to-mint px-6 py-3 text-center text-sm font-semibold text-white shadow-xl shadow-emerald-600/25 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-2xl hover:shadow-emerald-600/35 active:translate-y-0"
               >
                 Bắt đầu ghi giao dịch
               </a>
               <a
-                href="#roadmap"
+                href="/transactions"
                 className="rounded-full border border-emerald/20 bg-white/80 px-6 py-3 text-center text-sm font-semibold text-emerald shadow-lg shadow-emerald-900/5 backdrop-blur transition-all duration-300 hover:-translate-y-1.5 hover:border-emerald/40 hover:bg-white hover:shadow-xl hover:shadow-emerald-900/10 active:translate-y-0"
               >
-                Xem roadmap
+                Xem giao dịch
               </a>
             </div>
 
@@ -134,7 +158,13 @@ export default function Home() {
               </div>
               <div className="rounded-2xl border border-white/70 bg-white/65 p-4 shadow-lg shadow-emerald-900/5 backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:bg-white/90">
                 <dt className="text-xs text-ink/55">Supabase</dt>
-                <dd className="mt-1 font-semibold text-ink">Sau</dd>
+                <dd
+                  className={`mt-1 font-semibold ${
+                    supabaseStatus.isConnected ? "text-emerald" : "text-red-500"
+                  }`}
+                >
+                  {supabaseStatus.message}
+                </dd>
               </div>
               <div className="rounded-2xl border border-white/70 bg-white/65 p-4 shadow-lg shadow-emerald-900/5 backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:bg-white/90">
                 <dt className="text-xs text-ink/55">Gmail API</dt>
