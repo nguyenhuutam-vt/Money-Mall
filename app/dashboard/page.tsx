@@ -74,25 +74,48 @@ async function getMonthlyTransactions() {
     .order("transaction_time", { ascending: false });
 }
 
+async function getLatestTransactions() {
+  const configError = getSupabaseConfigError();
+
+  if (configError) {
+    return {
+      data: null,
+      error: new Error(configError)
+    };
+  }
+
+  return getSupabaseClient()
+    .from("transactions")
+    .select(
+      "id, transaction_time, amount, transaction_type, receiver_name, category, description"
+    )
+    .order("transaction_time", { ascending: false })
+    .limit(5);
+}
+
 export default async function DashboardPage() {
-  const { data, error } = await getMonthlyTransactions();
-  const transactions = (data ?? []) as Transaction[];
-  const latestTransactions = transactions.slice(0, 5);
-  const totalExpense = transactions.reduce(
+  const [
+    { data: monthlyData, error: monthlyError },
+    { data: latestData, error: latestError }
+  ] = await Promise.all([getMonthlyTransactions(), getLatestTransactions()]);
+  const monthlyTransactions = (monthlyData ?? []) as Transaction[];
+  const latestTransactions = (latestData ?? []) as Transaction[];
+  const error = monthlyError || latestError;
+  const totalExpense = monthlyTransactions.reduce(
     (total, transaction) =>
       transaction.transaction_type === "income"
         ? total
         : total + getAmount(transaction.amount),
     0
   );
-  const totalIncome = transactions.reduce(
+  const totalIncome = monthlyTransactions.reduce(
     (total, transaction) =>
       transaction.transaction_type === "income"
         ? total + getAmount(transaction.amount)
         : total,
     0
   );
-  const largestTransaction = transactions.reduce<Transaction | null>(
+  const largestTransaction = monthlyTransactions.reduce<Transaction | null>(
     (largest, transaction) => {
       if (!largest) {
         return transaction;
@@ -118,7 +141,7 @@ export default async function DashboardPage() {
     },
     {
       label: "Số giao dịch",
-      value: transactions.length.toString(),
+      value: monthlyTransactions.length.toString(),
       note: "Trong tháng hiện tại"
     },
     {
@@ -177,7 +200,7 @@ export default async function DashboardPage() {
               Vui lòng kiểm tra kết nối Supabase và thử lại.
             </p>
           </div>
-        ) : transactions.length === 0 ? (
+        ) : monthlyTransactions.length === 0 && latestTransactions.length === 0 ? (
           <div className="rounded-[2rem] border border-emerald/10 bg-white/90 p-8 text-center shadow-2xl shadow-emerald-900/10 backdrop-blur animate-fade-up animation-delay-150">
             <p className="text-lg font-semibold text-ink">
               Tháng này chưa có giao dịch nào
@@ -222,7 +245,7 @@ export default async function DashboardPage() {
                     Giao dịch gần đây
                   </h2>
                   <p className="mt-1 text-sm text-ink/55">
-                    5 giao dịch mới nhất trong tháng
+                    5 giao dịch mới nhất
                   </p>
                 </div>
                 <span className="rounded-full bg-emerald/10 px-3 py-1 text-xs font-semibold text-emerald">
