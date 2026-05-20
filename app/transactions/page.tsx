@@ -14,6 +14,8 @@ type Transaction = {
   description: string | null;
 };
 
+const TRANSACTIONS_PAGE_SIZE = 10;
+
 function formatAmount(amount: number) {
   return `${new Intl.NumberFormat("en-US").format(amount)} VND`;
 }
@@ -63,40 +65,98 @@ export default function TransactionsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState("");
+  const [transactionToDelete, setTransactionToDelete] =
+    useState<Transaction | null>(null);
+  const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+  const [deletingTransactionId, setDeletingTransactionId] = useState<
+    Transaction["id"] | null
+  >(null);
   const [typeFilter, setTypeFilter] = useState<
     "all" | NonNullable<Transaction["transaction_type"]>
   >("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState(getCurrentMonthValue);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasNextPage, setHasNextPage] = useState(false);
 
   useEffect(() => {
+    let isCurrentRequest = true;
+
     async function fetchTransactions() {
       const configError = getSupabaseConfigError();
 
       if (configError) {
-        setErrorMessage("Chưa cấu hình Supabase. Vui lòng kiểm tra biến môi trường.");
+        setErrorMessage(
+          "Chưa cấu hình Supabase. Vui lòng kiểm tra biến môi trường."
+        );
         setIsLoading(false);
         return;
       }
+
+      const from = (currentPage - 1) * TRANSACTIONS_PAGE_SIZE;
+      const to = from + TRANSACTIONS_PAGE_SIZE;
+
+      setIsLoading(true);
+      setErrorMessage("");
+      setDeleteErrorMessage("");
 
       const { data, error } = await getSupabaseClient()
         .from("transactions")
         .select(
           "id, transaction_time, amount, transaction_type, receiver_name, receiver_bank, category, description"
         )
-        .order("transaction_time", { ascending: false });
+        .order("transaction_time", { ascending: false })
+        .range(from, to);
+
+      if (!isCurrentRequest) {
+        return;
+      }
 
       if (error) {
         setErrorMessage("Không thể tải danh sách giao dịch. Vui lòng thử lại.");
+        setTransactions([]);
+        setHasNextPage(false);
       } else {
-        setTransactions(data ?? []);
+        const pagedTransactions = data ?? [];
+
+        setTransactions(pagedTransactions.slice(0, TRANSACTIONS_PAGE_SIZE));
+        setHasNextPage(pagedTransactions.length > TRANSACTIONS_PAGE_SIZE);
       }
 
       setIsLoading(false);
     }
 
     fetchTransactions();
-  }, []);
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, [currentPage]);
+
+  useEffect(() => {
+    if (!transactionToDelete) {
+      return;
+    }
+
+    const animationFrame = requestAnimationFrame(() => {
+      setIsDeleteModalVisible(true);
+    });
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !deletingTransactionId) {
+        setIsDeleteModalVisible(false);
+        setTransactionToDelete(null);
+        setDeleteErrorMessage("");
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [deletingTransactionId, transactionToDelete]);
 
   const categoryOptions = useMemo(() => {
     return Array.from(
@@ -157,6 +217,61 @@ export default function TransactionsPage() {
     setMonthFilter(getCurrentMonthValue());
   }
 
+  function goToPreviousPage() {
+    setCurrentPage((page) => Math.max(1, page - 1));
+  }
+
+  function goToNextPage() {
+    if (hasNextPage) {
+      setCurrentPage((page) => page + 1);
+    }
+  }
+
+  function openDeleteModal(transaction: Transaction) {
+    setDeleteErrorMessage("");
+    setIsDeleteModalVisible(false);
+    setTransactionToDelete(transaction);
+  }
+
+  function closeDeleteModal() {
+    if (deletingTransactionId !== null) {
+      return;
+    }
+
+    setIsDeleteModalVisible(false);
+    setTransactionToDelete(null);
+    setDeleteErrorMessage("");
+  }
+
+  async function handleDelete() {
+    if (!transactionToDelete) {
+      return;
+    }
+
+    const transactionId = transactionToDelete.id;
+
+    setDeleteErrorMessage("");
+    setDeletingTransactionId(transactionId);
+
+    const { error } = await getSupabaseClient()
+      .from("transactions")
+      .delete()
+      .eq("id", transactionId);
+
+    if (error) {
+      setDeleteErrorMessage("Không thể xoá giao dịch. Vui lòng thử lại.");
+      setDeletingTransactionId(null);
+      return;
+    }
+
+    setTransactions((currentTransactions) =>
+      currentTransactions.filter((transaction) => transaction.id !== transactionId)
+    );
+    setDeletingTransactionId(null);
+    setIsDeleteModalVisible(false);
+    setTransactionToDelete(null);
+  }
+
   return (
     <main className="min-h-screen bg-[linear-gradient(135deg,#f0fdf4_0%,#ffffff_48%,#ecfdf5_100%)] px-6 py-8 text-ink sm:py-12">
       <section className="mx-auto max-w-6xl">
@@ -192,7 +307,7 @@ export default function TransactionsPage() {
               <div className="rounded-3xl border border-red-100 bg-red-50 px-5 py-10 text-center text-sm font-medium text-red-600">
                 {errorMessage}
               </div>
-            ) : transactions.length === 0 ? (
+            ) : transactions.length === 0 && currentPage === 1 ? (
               <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center">
                 <p className="font-semibold text-ink">Chưa có giao dịch nào</p>
                 <p className="mt-2 text-sm text-ink/60">
@@ -315,6 +430,7 @@ export default function TransactionsPage() {
                         <th className="px-4 py-4 font-semibold">Ngân hàng</th>
                         <th className="px-4 py-4 font-semibold">Danh mục</th>
                         <th className="px-4 py-4 font-semibold">Mô tả</th>
+                        <th className="px-4 py-4 font-semibold">Thao tác</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-emerald/10">
@@ -353,6 +469,26 @@ export default function TransactionsPage() {
                           </td>
                           <td className="max-w-xs px-4 py-4 text-ink/70">
                             {displayValue(transaction.description)}
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="flex items-center gap-2">
+                              <a
+                                href={`/transactions/${transaction.id}/edit`}
+                                className="rounded-full border border-emerald/20 bg-white px-3 py-2 text-xs font-semibold text-emerald transition hover:border-emerald/35 hover:bg-leaf"
+                              >
+                                Sửa
+                              </a>
+                              <button
+                                type="button"
+                                disabled={deletingTransactionId === transaction.id}
+                                onClick={() => openDeleteModal(transaction)}
+                                className="rounded-full border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 transition hover:border-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {deletingTransactionId === transaction.id
+                                  ? "Đang xoá..."
+                                  : "Xoá"}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -414,16 +550,141 @@ export default function TransactionsPage() {
                           </dd>
                         </div>
                       </dl>
+
+                      <div className="mt-5 flex gap-3">
+                        <a
+                          href={`/transactions/${transaction.id}/edit`}
+                          className="flex-1 rounded-full border border-emerald/20 bg-white px-4 py-2.5 text-center text-sm font-semibold text-emerald shadow-sm shadow-emerald-900/5 transition hover:border-emerald/35 hover:bg-leaf"
+                        >
+                          Sửa
+                        </a>
+                        <button
+                          type="button"
+                          disabled={deletingTransactionId === transaction.id}
+                          onClick={() => openDeleteModal(transaction)}
+                          className="flex-1 rounded-full border border-red-100 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-600 shadow-sm transition hover:border-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {deletingTransactionId === transaction.id
+                            ? "Đang xoá..."
+                            : "Xoá"}
+                        </button>
+                      </div>
                     </article>
                   ))}
                 </div>
                   </>
                 )}
+
+                <div className="mt-5 flex flex-col items-center justify-between gap-3 rounded-3xl border border-emerald/10 bg-leaf/60 p-3 sm:flex-row">
+                  <button
+                    type="button"
+                    disabled={currentPage === 1}
+                    onClick={goToPreviousPage}
+                    className="w-full rounded-full border border-emerald/20 bg-white px-4 py-2.5 text-sm font-semibold text-emerald shadow-sm shadow-emerald-900/5 transition hover:border-emerald/35 hover:bg-white/80 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                  >
+                    Trang trước
+                  </button>
+                  <p className="text-sm font-semibold text-ink/70">
+                    Trang {currentPage}
+                  </p>
+                  <button
+                    type="button"
+                    disabled={!hasNextPage}
+                    onClick={goToNextPage}
+                    className="w-full rounded-full border border-emerald/20 bg-white px-4 py-2.5 text-sm font-semibold text-emerald shadow-sm shadow-emerald-900/5 transition hover:border-emerald/35 hover:bg-white/80 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                  >
+                    Trang sau
+                  </button>
+                </div>
               </>
             )}
           </div>
         </div>
       </section>
+      {transactionToDelete ? (
+        <div
+          className={`fixed inset-0 z-50 flex items-center justify-center bg-ink/30 px-4 py-6 backdrop-blur-sm transition-opacity duration-200 sm:px-6 ${
+            isDeleteModalVisible ? "opacity-100" : "opacity-0"
+          }`}
+          onClick={closeDeleteModal}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-transaction-title"
+            className={`w-full max-w-md rounded-[1.75rem] border border-emerald/10 bg-white/95 p-5 shadow-2xl shadow-emerald-900/20 transition-all duration-200 sm:p-6 ${
+              isDeleteModalVisible
+                ? "translate-y-0 scale-100 opacity-100"
+                : "translate-y-3 scale-95 opacity-0"
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="rounded-3xl border border-emerald/10 bg-leaf/70 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald">
+                Xác nhận xoá
+              </p>
+              <h2
+                id="delete-transaction-title"
+                className="mt-2 text-2xl font-semibold text-ink"
+              >
+                Xoá giao dịch?
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-ink/65">
+                Giao dịch này sẽ bị xoá vĩnh viễn. Bạn không thể hoàn tác thao
+                tác này.
+              </p>
+            </div>
+
+            <dl className="mt-4 grid gap-3 rounded-3xl border border-emerald/10 bg-white p-4 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-ink/55">Số tiền</dt>
+                <dd className="text-right font-semibold text-emerald">
+                  {formatAmount(transactionToDelete.amount)}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-ink/55">Người nhận</dt>
+                <dd className="text-right font-medium text-ink">
+                  {displayValue(transactionToDelete.receiver_name)}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-ink/55">Thời gian</dt>
+                <dd className="text-right font-medium text-ink">
+                  {formatDate(transactionToDelete.transaction_time)}
+                </dd>
+              </div>
+            </dl>
+
+            {deleteErrorMessage ? (
+              <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+                {deleteErrorMessage}
+              </p>
+            ) : null}
+
+            <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={deletingTransactionId !== null}
+                onClick={closeDeleteModal}
+                className="rounded-full border border-emerald/20 bg-white px-5 py-3 text-sm font-semibold text-emerald shadow-sm shadow-emerald-900/5 transition hover:border-emerald/35 hover:bg-leaf disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Huỷ
+              </button>
+              <button
+                type="button"
+                disabled={deletingTransactionId !== null}
+                onClick={handleDelete}
+                className="rounded-full border border-red-100 bg-red-50 px-5 py-3 text-sm font-semibold text-red-600 shadow-sm transition hover:border-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deletingTransactionId === transactionToDelete.id
+                  ? "Đang xoá..."
+                  : "Xoá giao dịch"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

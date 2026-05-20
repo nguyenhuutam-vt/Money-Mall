@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
+import TransactionForm from "../TransactionForm";
 
 export default function NewTransactionPage() {
   const router = useRouter();
@@ -81,109 +82,13 @@ export default function NewTransactionPage() {
         </div>
 
         <div className="rounded-[2rem] border border-emerald/10 bg-white/90 p-6 shadow-2xl shadow-emerald-900/10 backdrop-blur sm:p-8">
-          <form className="space-y-6" onSubmit={handleSubmit}>
-            <label className="block">
-              <span className="text-sm font-semibold text-ink">
-                Loại giao dịch
-              </span>
-              <select
-                name="transaction_type"
-                defaultValue="expense"
-                className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
-              >
-                <option value="expense">Chi tiêu</option>
-                <option value="income">Thu nhập</option>
-              </select>
-            </label>
-
-            <div className="grid gap-6 sm:grid-cols-2">
-              <label className="block">
-                <span className="text-sm font-semibold text-ink">
-                  Số tiền
-                </span>
-                <input
-                  required
-                  min="1"
-                  name="amount"
-                  type="number"
-                  className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
-                  placeholder="50000"
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-ink">
-                  Thời gian giao dịch
-                </span>
-                <input
-                  required
-                  name="transaction_time"
-                  type="datetime-local"
-                  className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
-                />
-              </label>
-            </div>
-
-            <div className="grid gap-6 sm:grid-cols-2">
-              <label className="block">
-                <span className="text-sm font-semibold text-ink">
-                  Người nhận
-                </span>
-                <input
-                  name="receiver_name"
-                  type="text"
-                  className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
-                  placeholder="Nguyễn Văn A"
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-semibold text-ink">
-                  Ngân hàng nhận
-                </span>
-                <input
-                  name="receiver_bank"
-                  type="text"
-                  className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
-                  placeholder="Vietcombank"
-                />
-              </label>
-            </div>
-
-            <label className="block">
-              <span className="text-sm font-semibold text-ink">Danh mục</span>
-              <input
-                name="category"
-                type="text"
-                className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
-                placeholder="Ăn uống"
-              />
-            </label>
-
-            <label className="block">
-              <span className="text-sm font-semibold text-ink">Mô tả</span>
-              <textarea
-                name="description"
-                rows={4}
-                className="mt-2 w-full resize-none rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
-                placeholder="Ghi chú ngắn cho giao dịch"
-              />
-            </label>
-
-            {errorMessage ? (
-              <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
-                {errorMessage}
-              </p>
-            ) : null}
-
-            <button
-              disabled={isSubmitting}
-              type="submit"
-              className="w-full rounded-full bg-gradient-to-r from-emerald to-mint px-6 py-3.5 text-sm font-semibold text-white shadow-xl shadow-emerald-600/25 transition hover:-translate-y-1 hover:shadow-2xl hover:shadow-emerald-600/30 disabled:cursor-not-allowed disabled:opacity-65 disabled:hover:translate-y-0"
-            >
-              {isSubmitting ? "Đang lưu..." : "Lưu giao dịch"}
-            </button>
-          </form>
+          <TransactionForm
+            isSubmitting={isSubmitting}
+            errorMessage={errorMessage}
+            submitLabel="Lưu giao dịch"
+            submittingLabel="Đang lưu..."
+            onSubmit={handleSubmit}
+          />
         </div>
       </section>
     </main>
