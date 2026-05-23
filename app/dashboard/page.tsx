@@ -1,11 +1,13 @@
-import Link from "next/link";
-import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
+"use client";
 
-export const dynamic = "force-dynamic";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 
 type Transaction = {
   id: string | number;
-  transaction_time: string;
+  transaction_time: string | null;
+  created_at: string | null;
   amount: number | string | null;
   transaction_type: "expense" | "income" | null;
   receiver_name: string | null;
@@ -20,7 +22,8 @@ function formatAmount(amount: number) {
   }).format(amount);
 }
 
-function formatDate(value: string) {
+function formatDate(value: string | null) {
+  if (!value) return "Chưa có thời gian";
   return new Intl.DateTimeFormat("vi-VN", {
     day: "2-digit",
     month: "2-digit",
@@ -28,6 +31,19 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function isValidTransactionDate(value: string | null): boolean {
+  if (!value) return false;
+  const d = new Date(value);
+  return !isNaN(d.getTime()) && d.getFullYear() > 1970;
+}
+
+function getEffectiveDate(
+  transaction_time: string | null,
+  created_at: string | null
+): string | null {
+  return isValidTransactionDate(transaction_time) ? transaction_time : (created_at ?? null);
 }
 
 function displayValue(value: string | null) {
@@ -50,31 +66,60 @@ function transactionTypeBadgeClass(type: Transaction["transaction_type"]) {
     : "border-rose-100 bg-rose-50 text-rose-600";
 }
 
-async function getMonthlyTransactions() {
+async function getMonthlyTransactions(userId: string) {
   const configError = getSupabaseConfigError();
 
   if (configError) {
-    return {
-      data: null,
-      error: new Error(configError)
-    };
+    return { data: null, error: new Error(configError) };
   }
 
+  const supabase = getSupabaseClient();
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+  const SELECT_FIELDS =
+    "id, transaction_time, created_at, amount, transaction_type, receiver_name, category, description";
 
-  return getSupabaseClient()
-    .from("transactions")
-    .select(
-      "id, transaction_time, amount, transaction_type, receiver_name, category, description"
-    )
-    .gte("transaction_time", startOfMonth.toISOString())
-    .lt("transaction_time", startOfNextMonth.toISOString())
-    .order("transaction_time", { ascending: false });
+  const [
+    { data: byTime, error: errorByTime },
+    { data: byCreated, error: errorByCreated }
+  ] = await Promise.all([
+    // Normal: transactions with a valid transaction_time in this month
+    supabase
+      .from("transactions")
+      .select(SELECT_FIELDS)
+      .eq("user_id", userId)
+      .gte("transaction_time", start)
+      .lt("transaction_time", end),
+    // Fallback: transactions with null or 1970-epoch transaction_time, created this month
+    supabase
+      .from("transactions")
+      .select(SELECT_FIELDS)
+      .eq("user_id", userId)
+      .or("transaction_time.is.null,transaction_time.lt.1971-01-01T00:00:00.000Z")
+      .gte("created_at", start)
+      .lt("created_at", end)
+  ]);
+
+  if (errorByTime ?? errorByCreated) {
+    return { data: null, error: errorByTime ?? errorByCreated };
+  }
+
+  const seenIds = new Set<string | number>();
+  const merged: Transaction[] = [];
+
+  for (const t of [...(byTime ?? []), ...(byCreated ?? [])]) {
+    const id = t.id as string | number;
+    if (!seenIds.has(id)) {
+      seenIds.add(id);
+      merged.push(t as Transaction);
+    }
+  }
+
+  return { data: merged, error: null };
 }
 
-async function getLatestTransactions() {
+async function getLatestTransactions(userId: string) {
   const configError = getSupabaseConfigError();
 
   if (configError) {
@@ -87,20 +132,84 @@ async function getLatestTransactions() {
   return getSupabaseClient()
     .from("transactions")
     .select(
-      "id, transaction_time, amount, transaction_type, receiver_name, category, description"
+      "id, transaction_time, created_at, amount, transaction_type, receiver_name, category, description"
     )
+    .eq("user_id", userId)
     .order("transaction_time", { ascending: false })
     .limit(5);
 }
 
-export default async function DashboardPage() {
-  const [
-    { data: monthlyData, error: monthlyError },
-    { data: latestData, error: latestError }
-  ] = await Promise.all([getMonthlyTransactions(), getLatestTransactions()]);
-  const monthlyTransactions = (monthlyData ?? []) as Transaction[];
-  const latestTransactions = (latestData ?? []) as Transaction[];
-  const error = monthlyError || latestError;
+export default function DashboardPage() {
+  const [monthlyTransactions, setMonthlyTransactions] = useState<Transaction[]>(
+    []
+  );
+  const [latestTransactions, setLatestTransactions] = useState<Transaction[]>(
+    []
+  );
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isLoginRequired, setIsLoginRequired] = useState(false);
+
+  useEffect(() => {
+    let isCurrentRequest = true;
+
+    async function fetchDashboard() {
+      const configError = getSupabaseConfigError();
+
+      if (configError) {
+        setErrorMessage(
+          "Chưa cấu hình Supabase. Vui lòng kiểm tra biến môi trường."
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      const supabase = getSupabaseClient();
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
+      const user = userData.user;
+
+      if (!isCurrentRequest) {
+        return;
+      }
+
+      if (userError || !user) {
+        setIsLoginRequired(true);
+        setIsLoading(false);
+        return;
+      }
+
+      const [
+        { data: monthlyData, error: monthlyError },
+        { data: latestData, error: latestError }
+      ] = await Promise.all([
+        getMonthlyTransactions(user.id),
+        getLatestTransactions(user.id)
+      ]);
+
+      if (!isCurrentRequest) {
+        return;
+      }
+
+      if (monthlyError || latestError) {
+        setErrorMessage("Không thể tải dashboard. Vui lòng thử lại.");
+        setMonthlyTransactions([]);
+        setLatestTransactions([]);
+      } else {
+        setMonthlyTransactions((monthlyData ?? []) as Transaction[]);
+        setLatestTransactions((latestData ?? []) as Transaction[]);
+      }
+
+      setIsLoading(false);
+    }
+
+    fetchDashboard();
+
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, []);
+
   const totalExpense = monthlyTransactions.reduce(
     (total, transaction) =>
       transaction.transaction_type === "income"
@@ -191,13 +300,34 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        {error ? (
+        {isLoading ? (
+          <div className="rounded-[2rem] border border-emerald/10 bg-white/90 px-6 py-10 text-center shadow-xl shadow-emerald-900/5 animate-fade-up animation-delay-150">
+            <p className="text-sm font-semibold text-emerald">
+              Đang tải dashboard...
+            </p>
+          </div>
+        ) : isLoginRequired ? (
+          <div className="rounded-[2rem] border border-emerald/10 bg-white/90 p-8 text-center shadow-2xl shadow-emerald-900/10 backdrop-blur animate-fade-up animation-delay-150">
+            <p className="text-lg font-semibold text-ink">
+              Vui lòng đăng nhập để xem dashboard
+            </p>
+            <p className="mx-auto mt-3 max-w-xl leading-7 text-ink/60">
+              Đăng nhập bằng Google để xem thống kê từ giao dịch của riêng bạn.
+            </p>
+            <Link
+              href="/"
+              className="mt-6 inline-flex rounded-full bg-gradient-to-r from-emerald to-mint px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:-translate-y-1 hover:shadow-xl hover:shadow-emerald-600/30"
+            >
+              Về trang chủ
+            </Link>
+          </div>
+        ) : errorMessage ? (
           <div className="rounded-[2rem] border border-red-100 bg-red-50 px-6 py-10 text-center shadow-xl shadow-red-900/5 animate-fade-up animation-delay-150">
             <h2 className="text-lg font-semibold text-red-700">
               Không thể tải dashboard
             </h2>
             <p className="mt-2 text-sm text-red-600">
-              Vui lòng kiểm tra kết nối Supabase và thử lại.
+              {errorMessage}
             </p>
           </div>
         ) : monthlyTransactions.length === 0 && latestTransactions.length === 0 ? (
@@ -274,7 +404,12 @@ export default async function DashboardPage() {
                           {displayValue(title)}
                         </h3>
                         <p className="mt-1 text-sm text-ink/55">
-                          {formatDate(transaction.transaction_time)}
+                          {formatDate(
+                            getEffectiveDate(
+                              transaction.transaction_time,
+                              transaction.created_at
+                            )
+                          )}
                         </p>
                         <div className="mt-2 flex flex-wrap gap-2">
                           <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-emerald">
