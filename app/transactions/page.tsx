@@ -5,7 +5,8 @@ import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 
 type Transaction = {
   id: string | number;
-  transaction_time: string;
+  transaction_time: string | null;
+  created_at: string | null;
   amount: number;
   transaction_type: "expense" | "income" | null;
   receiver_name: string | null;
@@ -20,7 +21,8 @@ function formatAmount(amount: number) {
   return `${new Intl.NumberFormat("en-US").format(amount)} VND`;
 }
 
-function formatDate(value: string) {
+function formatDate(value: string | null) {
+  if (!value) return "Chưa có thời gian";
   return new Intl.DateTimeFormat("vi-VN", {
     day: "2-digit",
     month: "2-digit",
@@ -28,6 +30,21 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function isValidTransactionDate(value: string | null): boolean {
+  if (!value) return false;
+  const d = new Date(value);
+  return !isNaN(d.getTime()) && d.getFullYear() > 1970;
+}
+
+function getEffectiveDate(
+  transaction_time: string | null,
+  created_at: string | null
+): string | null {
+  return isValidTransactionDate(transaction_time)
+    ? transaction_time
+    : (created_at ?? null);
 }
 
 function displayValue(value: string | null) {
@@ -79,6 +96,8 @@ export default function TransactionsPage() {
   const [monthFilter, setMonthFilter] = useState(getCurrentMonthValue);
   const [currentPage, setCurrentPage] = useState(1);
   const [hasNextPage, setHasNextPage] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isLoginRequired, setIsLoginRequired] = useState(false);
 
   useEffect(() => {
     let isCurrentRequest = true;
@@ -100,12 +119,34 @@ export default function TransactionsPage() {
       setIsLoading(true);
       setErrorMessage("");
       setDeleteErrorMessage("");
+      setIsLoginRequired(false);
 
-      const { data, error } = await getSupabaseClient()
+      const supabase = getSupabaseClient();
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
+      const user = userData.user;
+
+      if (!isCurrentRequest) {
+        return;
+      }
+
+      if (userError || !user) {
+        setCurrentUserId(null);
+        setTransactions([]);
+        setHasNextPage(false);
+        setIsLoginRequired(true);
+        setIsLoading(false);
+        return;
+      }
+
+      setCurrentUserId(user.id);
+
+      const { data, error } = await supabase
         .from("transactions")
         .select(
-          "id, transaction_time, amount, transaction_type, receiver_name, receiver_bank, category, description"
+          "id, transaction_time, created_at, amount, transaction_type, receiver_name, receiver_bank, category, description"
         )
+        .eq("user_id", user.id)
         .order("transaction_time", { ascending: false })
         .range(from, to);
 
@@ -174,8 +215,12 @@ export default function TransactionsPage() {
     const months = new Set([getCurrentMonthValue()]);
 
     transactions.forEach((transaction) => {
-      if (transaction.transaction_time) {
-        months.add(transaction.transaction_time.slice(0, 7));
+      const effectiveDate = getEffectiveDate(
+        transaction.transaction_time,
+        transaction.created_at
+      );
+      if (effectiveDate) {
+        months.add(effectiveDate.slice(0, 7));
       }
     });
 
@@ -202,9 +247,13 @@ export default function TransactionsPage() {
       const matchesCategory =
         categoryFilter === "all" ||
         transaction.category?.trim() === categoryFilter;
+      const effectiveDate = getEffectiveDate(
+        transaction.transaction_time,
+        transaction.created_at
+      );
       const matchesMonth =
         monthFilter === "all" ||
-        transaction.transaction_time.slice(0, 7) === monthFilter;
+        (effectiveDate ? effectiveDate.slice(0, 7) === monthFilter : false);
 
       return matchesSearch && matchesType && matchesCategory && matchesMonth;
     });
@@ -248,6 +297,11 @@ export default function TransactionsPage() {
       return;
     }
 
+    if (!currentUserId) {
+      setDeleteErrorMessage("Vui lòng đăng nhập để xoá giao dịch.");
+      return;
+    }
+
     const transactionId = transactionToDelete.id;
 
     setDeleteErrorMessage("");
@@ -256,7 +310,8 @@ export default function TransactionsPage() {
     const { error } = await getSupabaseClient()
       .from("transactions")
       .delete()
-      .eq("id", transactionId);
+      .eq("id", transactionId)
+      .eq("user_id", currentUserId);
 
     if (error) {
       setDeleteErrorMessage("Không thể xoá giao dịch. Vui lòng thử lại.");
@@ -288,12 +343,20 @@ export default function TransactionsPage() {
                 Theo dõi các khoản thu chi đã ghi lại
               </p>
             </div>
-            <a
-              href="/transactions/new"
-              className="inline-flex w-fit rounded-full bg-gradient-to-r from-emerald to-mint px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:-translate-y-1 hover:shadow-xl hover:shadow-emerald-600/30"
-            >
-              Thêm giao dịch
-            </a>
+            <div className="flex flex-wrap gap-3">
+              <a
+                href="/transactions/import-vietcombank"
+                className="inline-flex w-fit rounded-full border border-emerald/20 bg-white px-5 py-3 text-sm font-semibold text-emerald shadow-sm shadow-emerald-900/5 transition hover:-translate-y-1 hover:border-emerald/35 hover:bg-leaf hover:shadow-md"
+              >
+                Import Vietcombank
+              </a>
+              <a
+                href="/transactions/new"
+                className="inline-flex w-fit rounded-full bg-gradient-to-r from-emerald to-mint px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:-translate-y-1 hover:shadow-xl hover:shadow-emerald-600/30"
+              >
+                Thêm giao dịch
+              </a>
+            </div>
           </div>
         </div>
 
@@ -302,6 +365,16 @@ export default function TransactionsPage() {
             {isLoading ? (
               <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center text-sm font-medium text-emerald">
                 Đang tải giao dịch...
+              </div>
+            ) : isLoginRequired ? (
+              <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center">
+                <p className="font-semibold text-ink">
+                  Vui lòng đăng nhập để xem giao dịch
+                </p>
+                <p className="mt-2 text-sm text-ink/60">
+                  Đăng nhập bằng Google để xem và quản lý giao dịch của riêng
+                  bạn.
+                </p>
               </div>
             ) : errorMessage ? (
               <div className="rounded-3xl border border-red-100 bg-red-50 px-5 py-10 text-center text-sm font-medium text-red-600">
@@ -440,12 +513,17 @@ export default function TransactionsPage() {
                           className="transition hover:bg-leaf/50"
                         >
                           <td className="px-4 py-4 text-ink/70">
-                            {formatDate(transaction.transaction_time)}
+                            {formatDate(
+                              getEffectiveDate(
+                                transaction.transaction_time,
+                                transaction.created_at
+                              )
+                            )}
                           </td>
                           <td className="whitespace-nowrap px-4 py-4 font-semibold text-emerald">
                             {formatAmount(transaction.amount)}
                           </td>
-                          <td className="px-4 py-4">
+                          <td className="whitespace-nowrap px-4 py-4">
                             <span
                               className={`rounded-full border px-3 py-1 text-xs font-semibold ${transactionTypeBadgeClass(
                                 transaction.transaction_type
@@ -462,7 +540,7 @@ export default function TransactionsPage() {
                           <td className="px-4 py-4 text-ink/70">
                             {displayValue(transaction.receiver_bank)}
                           </td>
-                          <td className="px-4 py-4">
+                          <td className="whitespace-nowrap px-4 py-4">
                             <span className="rounded-full bg-emerald/10 px-3 py-1 text-xs font-semibold text-emerald">
                               {displayValue(transaction.category)}
                             </span>
@@ -505,7 +583,12 @@ export default function TransactionsPage() {
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <p className="text-sm text-ink/55">
-                            {formatDate(transaction.transaction_time)}
+                            {formatDate(
+                              getEffectiveDate(
+                                transaction.transaction_time,
+                                transaction.created_at
+                              )
+                            )}
                           </p>
                           <h2 className="mt-2 font-semibold text-ink">
                             {displayValue(transaction.receiver_name)}

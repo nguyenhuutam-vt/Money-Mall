@@ -28,7 +28,13 @@ export function getSupabaseClient() {
   if (!supabaseClient) {
     supabaseClient = createClient(
       configuredSupabaseUrl,
-      configuredSupabaseAnonKey
+      configuredSupabaseAnonKey,
+      {
+        auth: {
+          detectSessionInUrl: false,
+          flowType: "pkce"
+        }
+      }
     );
   }
 

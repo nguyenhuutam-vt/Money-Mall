@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import AuthButton from "./AuthButton";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -15,44 +16,28 @@ export default function RootLayout({
   return (
     <html lang="vi">
       <body className="bg-paper text-ink">
-        <header className="sticky top-0 z-50 border-b border-emerald/10 bg-white/85 backdrop-blur-xl">
-          <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
-            <Link href="/" className="text-lg font-semibold text-ink">
-              Expense Mail App
-            </Link>
-
-            <nav className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink/65">
+        <header className="sticky top-0 z-50 border-b border-emerald/10 bg-white/90 shadow-sm shadow-emerald-900/5 backdrop-blur-xl">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <div className="flex min-h-[72px] flex-wrap items-center gap-x-3 gap-y-2 py-2 lg:flex-nowrap lg:py-0">
               <Link
                 href="/"
-                className="rounded-full px-3 py-2 transition hover:bg-emerald/10 hover:text-emerald"
+                className="order-1 flex min-w-0 flex-1 items-center gap-2.5 rounded-full pr-2 transition hover:text-emerald focus:outline-none focus:ring-2 focus:ring-emerald/25 focus:ring-offset-2 sm:flex-none lg:w-[220px]"
               >
-                Trang chủ
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald to-mint text-xs font-black text-white shadow-md shadow-emerald-700/20">
+                  EM
+                </span>
+                <span className="min-w-0 leading-tight">
+                  <span className="block truncate text-sm font-bold text-ink sm:text-base">
+                    Expense Mail App
+                  </span>
+                  <span className="block truncate text-xs font-semibold text-emerald/80">
+                    Quản lý chi tiêu
+                  </span>
+                </span>
               </Link>
-              <Link
-                href="/dashboard"
-                className="rounded-full px-3 py-2 transition hover:bg-emerald/10 hover:text-emerald"
-              >
-                Tổng quan
-              </Link>
-              <Link
-                href="/transactions"
-                className="rounded-full px-3 py-2 transition hover:bg-emerald/10 hover:text-emerald"
-              >
-                Giao dịch
-              </Link>
-              <Link
-                href="/transactions/new"
-                className="rounded-full px-3 py-2 transition hover:bg-emerald/10 hover:text-emerald"
-              >
-                Thêm giao dịch
-              </Link>
-              <Link
-                href="/transactions/new"
-                className="rounded-full bg-gradient-to-r from-emerald to-mint px-5 py-2.5 text-white shadow-lg shadow-emerald-600/20 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-emerald-600/30"
-              >
-                Thêm giao dịch
-              </Link>
-            </nav>
+
+              <AuthButton />
+            </div>
           </div>
         </header>
 

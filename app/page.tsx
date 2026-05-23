@@ -107,8 +107,16 @@ const roadmap = [
   }
 ];
 
-export default async function Home() {
+type HomeProps = {
+  searchParams?: Promise<{
+    auth?: string;
+  }>;
+};
+
+export default async function Home({ searchParams }: HomeProps) {
   const supabaseStatus = await checkSupabaseConnection();
+  const params = await searchParams;
+  const needsLogin = params?.auth === "required";
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_18%_8%,#bbf7d0_0,transparent_30%),radial-gradient(circle_at_82%_18%,#ccfbf1_0,transparent_28%),linear-gradient(135deg,#f0fdf4_0%,#ffffff_46%,#ecfdf5_100%)]">
@@ -159,6 +167,13 @@ export default async function Home() {
                 Xem giao dịch
               </a>
             </div>
+
+            {needsLogin ? (
+              <div className="mt-6 rounded-3xl border border-emerald/10 bg-white/85 px-5 py-4 text-sm font-medium text-ink/70 shadow-xl shadow-emerald-900/5 backdrop-blur animate-fade-up animation-delay-500">
+                Vui lòng đăng nhập bằng Google để mở dashboard và quản lý giao
+                dịch của bạn.
+              </div>
+            ) : null}
 
             <dl className="mt-12 grid max-w-xl grid-cols-3 gap-3 text-center animate-fade-up animation-delay-500">
               <div className="rounded-2xl border border-white/70 bg-white/65 p-4 shadow-lg shadow-emerald-900/5 backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:bg-white/90">

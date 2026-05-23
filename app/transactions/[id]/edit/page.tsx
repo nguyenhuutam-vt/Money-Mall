@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 import TransactionForm, {
@@ -20,6 +21,8 @@ export default function EditTransactionPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [notFound, setNotFound] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isLoginRequired, setIsLoginRequired] = useState(false);
 
   useEffect(() => {
     async function fetchTransaction() {
@@ -31,12 +34,27 @@ export default function EditTransactionPage() {
         return;
       }
 
-      const { data, error } = await getSupabaseClient()
+      const supabase = getSupabaseClient();
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
+      const user = userData.user;
+
+      if (userError || !user) {
+        setIsLoginRequired(true);
+        setCurrentUserId(null);
+        setIsLoading(false);
+        return;
+      }
+
+      setCurrentUserId(user.id);
+
+      const { data, error } = await supabase
         .from("transactions")
         .select(
           "id, transaction_type, amount, transaction_time, receiver_name, receiver_bank, description, category"
         )
         .eq("id", transactionId)
+        .eq("user_id", user.id)
         .maybeSingle();
 
       if (error) {
@@ -77,7 +95,13 @@ export default function EditTransactionPage() {
       return;
     }
 
-    const { error } = await getSupabaseClient()
+    if (!currentUserId) {
+      setErrorMessage("Vui lòng đăng nhập để cập nhật giao dịch.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const { data, error } = await getSupabaseClient()
       .from("transactions")
       .update({
         transaction_type: transactionType,
@@ -88,9 +112,12 @@ export default function EditTransactionPage() {
         description: String(formData.get("description") || ""),
         category: String(formData.get("category") || "")
       })
-      .eq("id", transactionId);
+      .eq("id", transactionId)
+      .eq("user_id", currentUserId)
+      .select("id")
+      .maybeSingle();
 
-    if (error) {
+    if (error || !data) {
       setErrorMessage("Không thể cập nhật giao dịch. Vui lòng thử lại.");
       setIsSubmitting(false);
       return;
@@ -128,6 +155,21 @@ export default function EditTransactionPage() {
           {isLoading ? (
             <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center text-sm font-medium text-emerald">
               Đang tải giao dịch...
+            </div>
+          ) : isLoginRequired ? (
+            <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center">
+              <p className="font-semibold text-ink">
+                Vui lòng đăng nhập để sửa giao dịch
+              </p>
+              <p className="mt-2 text-sm text-ink/60">
+                Đăng nhập bằng Google để chỉnh sửa giao dịch của riêng bạn.
+              </p>
+              <Link
+                href="/"
+                className="mt-5 inline-flex rounded-full bg-gradient-to-r from-emerald to-mint px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:-translate-y-1 hover:shadow-xl hover:shadow-emerald-600/30"
+              >
+                Về trang chủ
+              </Link>
             </div>
           ) : notFound ? (
             <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center">

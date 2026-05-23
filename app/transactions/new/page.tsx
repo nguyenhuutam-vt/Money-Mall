@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 import TransactionForm from "../TransactionForm";
@@ -9,6 +9,36 @@ export default function NewTransactionPage() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [isLoginRequired, setIsLoginRequired] = useState(false);
+
+  useEffect(() => {
+    let isCurrentRequest = true;
+
+    async function checkAuth() {
+      const configError = getSupabaseConfigError();
+
+      if (configError) {
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      const { data, error } = await getSupabaseClient().auth.getUser();
+
+      if (!isCurrentRequest) {
+        return;
+      }
+
+      setIsLoginRequired(Boolean(error || !data.user));
+      setIsCheckingAuth(false);
+    }
+
+    checkAuth();
+
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -34,8 +64,19 @@ export default function NewTransactionPage() {
       return;
     }
 
-    const { error } = await getSupabaseClient().from("transactions").insert({
+    const supabase = getSupabaseClient();
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    const user = userData.user;
+
+    if (userError || !user) {
+      setErrorMessage("Vui lòng đăng nhập để lưu giao dịch.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const { error } = await supabase.from("transactions").insert({
       amount,
+      user_id: user.id,
       transaction_time: new Date(transactionTime).toISOString(),
       receiver_name: String(formData.get("receiver_name") || ""),
       receiver_bank: String(formData.get("receiver_bank") || ""),
@@ -82,13 +123,28 @@ export default function NewTransactionPage() {
         </div>
 
         <div className="rounded-[2rem] border border-emerald/10 bg-white/90 p-6 shadow-2xl shadow-emerald-900/10 backdrop-blur sm:p-8">
-          <TransactionForm
-            isSubmitting={isSubmitting}
-            errorMessage={errorMessage}
-            submitLabel="Lưu giao dịch"
-            submittingLabel="Đang lưu..."
-            onSubmit={handleSubmit}
-          />
+          {isCheckingAuth ? (
+            <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center text-sm font-medium text-emerald">
+              Đang kiểm tra đăng nhập...
+            </div>
+          ) : isLoginRequired ? (
+            <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center">
+              <p className="font-semibold text-ink">
+                Vui lòng đăng nhập để thêm giao dịch
+              </p>
+              <p className="mt-2 text-sm text-ink/60">
+                Đăng nhập bằng Google để lưu giao dịch vào tài khoản của bạn.
+              </p>
+            </div>
+          ) : (
+            <TransactionForm
+              isSubmitting={isSubmitting}
+              errorMessage={errorMessage}
+              submitLabel="Lưu giao dịch"
+              submittingLabel="Đang lưu..."
+              onSubmit={handleSubmit}
+            />
+          )}
         </div>
       </section>
     </main>
