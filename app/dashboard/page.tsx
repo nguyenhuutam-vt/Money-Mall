@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
+import {
+  getEffectiveTransactionDate,
+  getVietnamMonthValue
+} from "@/lib/transactionDates";
 
 type Transaction = {
   id: string | number;
@@ -24,26 +28,26 @@ function formatAmount(amount: number) {
 
 function formatDate(value: string | null) {
   if (!value) return "Chưa có thời gian";
-  return new Intl.DateTimeFormat("vi-VN", {
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Chưa có thời gian";
+  }
+
+  const time = new Intl.DateTimeFormat("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Ho_Chi_Minh"
+  }).format(date);
+  const day = new Intl.DateTimeFormat("vi-VN", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
-}
+    timeZone: "Asia/Ho_Chi_Minh"
+  }).format(date);
 
-function isValidTransactionDate(value: string | null): boolean {
-  if (!value) return false;
-  const d = new Date(value);
-  return !isNaN(d.getTime()) && d.getFullYear() > 1970;
-}
-
-function getEffectiveDate(
-  transaction_time: string | null,
-  created_at: string | null
-): string | null {
-  return isValidTransactionDate(transaction_time) ? transaction_time : (created_at ?? null);
+  return `${time} ${day}`;
 }
 
 function displayValue(value: string | null) {
@@ -75,48 +79,28 @@ async function getMonthlyTransactions(userId: string) {
 
   const supabase = getSupabaseClient();
   const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+  const currentMonth = getVietnamMonthValue(now);
   const SELECT_FIELDS =
     "id, transaction_time, created_at, amount, transaction_type, receiver_name, category, description";
 
-  const [
-    { data: byTime, error: errorByTime },
-    { data: byCreated, error: errorByCreated }
-  ] = await Promise.all([
-    // Normal: transactions with a valid transaction_time in this month
-    supabase
-      .from("transactions")
-      .select(SELECT_FIELDS)
-      .eq("user_id", userId)
-      .gte("transaction_time", start)
-      .lt("transaction_time", end),
-    // Fallback: transactions with null or 1970-epoch transaction_time, created this month
-    supabase
-      .from("transactions")
-      .select(SELECT_FIELDS)
-      .eq("user_id", userId)
-      .or("transaction_time.is.null,transaction_time.lt.1971-01-01T00:00:00.000Z")
-      .gte("created_at", start)
-      .lt("created_at", end)
-  ]);
+  const { data, error } = await supabase
+    .from("transactions")
+    .select(SELECT_FIELDS)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
 
-  if (errorByTime ?? errorByCreated) {
-    return { data: null, error: errorByTime ?? errorByCreated };
+  if (error) {
+    return { data: null, error };
   }
 
-  const seenIds = new Set<string | number>();
-  const merged: Transaction[] = [];
+  return {
+    data: ((data ?? []) as Transaction[]).filter((transaction) => {
+      const effectiveDate = getEffectiveTransactionDate(transaction);
 
-  for (const t of [...(byTime ?? []), ...(byCreated ?? [])]) {
-    const id = t.id as string | number;
-    if (!seenIds.has(id)) {
-      seenIds.add(id);
-      merged.push(t as Transaction);
-    }
-  }
-
-  return { data: merged, error: null };
+      return getVietnamMonthValue(effectiveDate) === currentMonth;
+    }),
+    error: null
+  };
 }
 
 async function getLatestTransactions(userId: string) {
@@ -129,14 +113,30 @@ async function getLatestTransactions(userId: string) {
     };
   }
 
-  return getSupabaseClient()
+  const { data, error } = await getSupabaseClient()
     .from("transactions")
     .select(
       "id, transaction_time, created_at, amount, transaction_type, receiver_name, category, description"
     )
     .eq("user_id", userId)
-    .order("transaction_time", { ascending: false })
-    .limit(5);
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const sortedTransactions = ((data ?? []) as Transaction[]).sort(
+    (first, second) => {
+      const firstDate = getEffectiveTransactionDate(first);
+      const secondDate = getEffectiveTransactionDate(second);
+      const firstTime = firstDate ? new Date(firstDate).getTime() : 0;
+      const secondTime = secondDate ? new Date(secondDate).getTime() : 0;
+
+      return secondTime - firstTime;
+    }
+  );
+
+  return { data: sortedTransactions.slice(0, 5), error: null };
 }
 
 export default function DashboardPage() {
@@ -405,10 +405,7 @@ export default function DashboardPage() {
                         </h3>
                         <p className="mt-1 text-sm text-ink/55">
                           {formatDate(
-                            getEffectiveDate(
-                              transaction.transaction_time,
-                              transaction.created_at
-                            )
+                            getEffectiveTransactionDate(transaction)
                           )}
                         </p>
                         <div className="mt-2 flex flex-wrap gap-2">

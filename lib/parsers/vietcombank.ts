@@ -4,19 +4,14 @@
  * No AI, no OCR, no external libraries.
  */
 
-export type VietcombankParsedTransaction = {
+import type { BankReceiptParser, ParsedTransaction } from "./types";
+import {
+  findVietnameseTransactionDateTimeText,
+  parseVietnameseTransactionDateTime
+} from "../transactionDates";
+
+export type VietcombankParsedTransaction = ParsedTransaction & {
   bank_name: "Vietcombank";
-  transaction_type: "expense";
-  currency: string;
-  transaction_time: string | null;
-  amount: number | null;
-  fee: number;
-  sender_name: string | null;
-  sender_account: string | null;
-  receiver_name: string | null;
-  receiver_account: string | null;
-  receiver_bank: string | null;
-  description: string | null;
 };
 
 /**
@@ -42,37 +37,6 @@ function extract(text: string, labels: string[]): string | null {
 }
 
 /**
- * Parse a Vietnamese/English date-time string into an ISO 8601 string.
- * Handles formats like:
- *   "25/12/2024 14:30:00"
- *   "25-12-2024 14:30"
- *   "2024-12-25 14:30:00"
- */
-function parseDateTime(raw: string): string | null {
-  if (!raw) return null;
-
-  // dd/mm/yyyy hh:mm:ss  or  dd-mm-yyyy hh:mm
-  const dmyMatch = raw.match(
-    /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/
-  );
-  if (dmyMatch) {
-    const [, d, m, y, h, min, s = "00"] = dmyMatch;
-    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}T${h.padStart(2, "0")}:${min}:${s}`;
-  }
-
-  // yyyy-mm-dd hh:mm:ss
-  const ymdMatch = raw.match(
-    /(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/
-  );
-  if (ymdMatch) {
-    const [, y, m, d, h, min, s = "00"] = ymdMatch;
-    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}T${h.padStart(2, "0")}:${min}:${s}`;
-  }
-
-  return null;
-}
-
-/**
  * Parse an amount string, stripping thousand separators and currency symbols.
  * Handles "1.500.000 VND", "1,500,000", "1500000".
  */
@@ -87,6 +51,19 @@ function parseAmount(raw: string): number | null {
   return isNaN(value) ? null : value;
 }
 
+export function canParseVietcombankReceipt(raw: string) {
+  const text = raw.toLowerCase();
+  const keywords = [
+    "vietcombank",
+    "vcb",
+    "beneficiary bank name",
+    "details of payment",
+    "trans. date, time"
+  ];
+
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
 /**
  * Parse raw Vietcombank receipt text and return a normalized transaction object.
  */
@@ -95,13 +72,14 @@ export function parseVietcombankReceipt(
 ): VietcombankParsedTransaction {
   const text = raw.replace(/\r\n/g, "\n");
 
-  const rawTime = extract(text, [
-    "Ngày, giờ giao dịch",
-    "Ngày giờ giao dịch",
-    "Trans. Date, Time",
-    "Trans. Date",
-    "Transaction Date",
-  ]);
+  const rawTime =
+    extract(text, [
+      "Ngày, giờ giao dịch",
+      "Ngày giờ giao dịch",
+      "Trans. Date, Time",
+      "Trans. Date",
+      "Transaction Date",
+    ]) ?? findVietnameseTransactionDateTimeText(text);
 
   const rawAmount = extract(text, ["Amount", "Số tiền"]);
 
@@ -161,7 +139,7 @@ export function parseVietcombankReceipt(
     bank_name: "Vietcombank",
     transaction_type: "expense",
     currency: "VND",
-    transaction_time: rawTime ? parseDateTime(rawTime) : null,
+    transaction_time: parseVietnameseTransactionDateTime(rawTime),
     amount: rawAmount ? parseAmount(rawAmount) : null,
     fee: rawFee ? (parseAmount(rawFee) ?? 0) : 0,
     sender_name: senderName,
@@ -172,3 +150,9 @@ export function parseVietcombankReceipt(
     description: description,
   };
 }
+
+export const vietcombankParser: BankReceiptParser = {
+  bankName: "Vietcombank",
+  canParse: canParseVietcombankReceipt,
+  parse: parseVietcombankReceipt
+};
