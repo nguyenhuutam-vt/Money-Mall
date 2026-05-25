@@ -25,8 +25,28 @@ const LABEL_CLASS = "text-sm font-semibold text-ink";
 /** Convert ISO string (or partial) to datetime-local input value */
 function toDateTimeLocal(iso: string | null): string {
   if (!iso) return "";
-  // datetime-local expects "yyyy-MM-ddTHH:mm"
-  return iso.slice(0, 16);
+
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric"
+  }).formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return `${getPart("year")}-${getPart("month")}-${getPart("day")}T${getPart(
+    "hour"
+  )}:${getPart("minute")}`;
 }
 
 export default function ImportVietcombankPage() {

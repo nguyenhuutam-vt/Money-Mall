@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
+import { isValidTransactionDate } from "@/lib/transactionDates";
 import {
   parseVietcombankReceipt,
   type VietcombankParsedTransaction
@@ -285,6 +286,18 @@ function displayValue(value: string | null) {
   return value?.trim() ? value : "Chưa có";
 }
 
+function resolveTransactionTime(parsedTime: string | null, emailDate: string) {
+  if (isValidTransactionDate(parsedTime)) {
+    return new Date(parsedTime as string).toISOString();
+  }
+
+  if (emailDate !== "(Không rõ ngày)" && isValidTransactionDate(emailDate)) {
+    return new Date(emailDate).toISOString();
+  }
+
+  return null;
+}
+
 export default function GmailTestPage() {
   const [messages, setMessages] = useState<GmailMessage[]>([]);
   const [skippedEmails, setSkippedEmails] = useState<SkippedEmail[]>([]);
@@ -482,9 +495,10 @@ export default function GmailTestPage() {
     const { error } = await supabase.from("transactions").insert({
       amount: parsed.amount,
       user_id: user.id,
-      transaction_time: parsed.transaction_time
-        ? new Date(parsed.transaction_time).toISOString()
-        : null,
+      transaction_time: resolveTransactionTime(
+        parsed.transaction_time,
+        message.date
+      ),
       transaction_type: "expense",
       receiver_name: parsed.receiver_name,
       receiver_account: parsed.receiver_account,

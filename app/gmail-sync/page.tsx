@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 import {
-  parseVietcombankReceipt,
-  type VietcombankParsedTransaction
-} from "@/lib/parsers/vietcombank";
+  parseBankReceipt,
+  type ParsedBankReceipt
+} from "@/lib/parsers";
+import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
+import { isValidTransactionDate } from "@/lib/transactionDates";
 
 type GmailListMessage = {
   id: string;
@@ -49,7 +50,7 @@ type ReceiptCandidate = {
   subject: string;
   emailDate: string;
   rawText: string;
-  parsed: VietcombankParsedTransaction;
+  parsed: ParsedBankReceipt;
 };
 
 type FailedCandidate = ReceiptCandidate & {
@@ -70,8 +71,17 @@ type ReceiptFilterResult = {
   isReceipt: boolean;
 };
 
-const GMAIL_SEARCH_QUERY =
-  'newer_than:365d ("Biên lai chuyển tiền" OR "Payment Receipt" OR "Beneficiary Name" OR "Details of Payment" OR "Amount")';
+type GmailSyncState = {
+  user_id: string;
+  last_synced_at: string | null;
+  last_scan_query: string | null;
+  last_scan_result_count: number | null;
+  updated_at: string | null;
+};
+
+const RECEIPT_SEARCH_QUERY =
+  '("Biên lai chuyển tiền" OR "Payment Receipt" OR (Vietcombank ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")) OR (Techcombank ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")) OR (("MB Bank" OR MBBank) ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")))';
+const DEFAULT_GMAIL_SEARCH_QUERY = `newer_than:365d ${RECEIPT_SEARCH_QUERY}`;
 const RECEIPT_SCORE_THRESHOLD = 3;
 
 function getGmailErrorMessage(data: unknown) {
@@ -230,6 +240,14 @@ function getReceiptFilter(rawText: string): ReceiptFilterResult {
     "beneficiary name",
     "tên ngân hàng hưởng",
     "beneficiary bank name",
+    "mb bank",
+    "mbbank",
+    "military bank",
+    "ngân hàng quân đội",
+    "giao dịch",
+    "tài khoản",
+    "ghi có",
+    "ghi nợ",
     "số tiền",
     "amount",
     "nội dung chuyển tiền",
@@ -273,8 +291,67 @@ function formatDate(value: string | null) {
   }).format(new Date(value));
 }
 
+function formatGmailSearchDate(value: string) {
+  const date = new Date(value);
+
+  if (isNaN(date.getTime())) {
+    return "";
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}/${month}/${day}`;
+}
+
+function buildGmailSearchQuery(
+  syncState: GmailSyncState | null,
+  shouldForceFullScan: boolean
+) {
+  if (shouldForceFullScan || !syncState?.last_synced_at) {
+    return DEFAULT_GMAIL_SEARCH_QUERY;
+  }
+
+  const afterDate = formatGmailSearchDate(syncState.last_synced_at);
+
+  return afterDate
+    ? `after:${afterDate} ${RECEIPT_SEARCH_QUERY}`
+    : DEFAULT_GMAIL_SEARCH_QUERY;
+}
+
+function getScanStatusMessage(scanStatus: ScanStatus) {
+  if (scanStatus === "idle") {
+    return "Sẵn sàng quét Gmail.";
+  }
+
+  if (scanStatus === "loading") {
+    return "Đang quét Gmail...";
+  }
+
+  if (scanStatus === "error") {
+    return "Có lỗi khi quét Gmail.";
+  }
+
+  if (scanStatus === "empty") {
+    return "Không tìm thấy biên lai chuyển khoản phù hợp";
+  }
+
+  return "Đã quét xong Gmail.";
+}
+
 function displayValue(value: string | null) {
   return value?.trim() ? value : "Chưa có";
+}
+
+function transactionTypeLabel(type: ParsedBankReceipt["transaction_type"]) {
+  return type === "income" ? "Thu nhập" : "Chi tiêu";
+}
+
+function transactionTypeBadgeClass(type: ParsedBankReceipt["transaction_type"]) {
+  return type === "income"
+    ? "bg-emerald/10 text-emerald"
+    : "bg-amber-50 text-amber-700";
 }
 
 function isDuplicateError(errorMessage: string, errorCode?: string) {
@@ -285,18 +362,16 @@ function resolveTransactionTime(
   parsedTime: string | null,
   emailDate: string
 ): string | null {
-  if (parsedTime) {
-    const d = new Date(parsedTime);
-    if (!isNaN(d.getTime()) && d.getFullYear() > 1970) {
-      return d.toISOString();
-    }
+  if (isValidTransactionDate(parsedTime)) {
+    return new Date(parsedTime as string).toISOString();
   }
+
   if (emailDate && emailDate !== "(Không rõ ngày)") {
-    const d = new Date(emailDate);
-    if (!isNaN(d.getTime())) {
-      return d.toISOString();
+    if (isValidTransactionDate(emailDate)) {
+      return new Date(emailDate).toISOString();
     }
   }
+
   return null;
 }
 
@@ -316,6 +391,9 @@ export default function GmailSyncPage() {
     Record<string, SaveItemStatus>
   >({});
   const [saveSummary, setSaveSummary] = useState<SaveSummary | null>(null);
+  const [syncState, setSyncState] = useState<GmailSyncState | null>(null);
+  const [syncStateErrorMessage, setSyncStateErrorMessage] = useState("");
+  const [isResettingSyncState, setIsResettingSyncState] = useState(false);
 
   useEffect(() => {
     let isCurrentRequest = true;
@@ -328,13 +406,39 @@ export default function GmailSyncPage() {
         return;
       }
 
-      const { data, error } = await getSupabaseClient().auth.getSession();
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase.auth.getSession();
 
       if (!isCurrentRequest) {
         return;
       }
 
-      setIsLoginRequired(Boolean(error || !data.session));
+      if (error || !data.session) {
+        setIsLoginRequired(true);
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      const { data: stateData, error: stateError } = await supabase
+        .from("gmail_sync_state")
+        .select(
+          "user_id,last_synced_at,last_scan_query,last_scan_result_count,updated_at"
+        )
+        .eq("user_id", data.session.user.id)
+        .maybeSingle();
+
+      if (!isCurrentRequest) {
+        return;
+      }
+
+      if (stateError) {
+        setSyncStateErrorMessage("Không thể tải trạng thái quét Gmail.");
+      } else {
+        setSyncState(stateData);
+        setSyncStateErrorMessage("");
+      }
+
+      setIsLoginRequired(false);
       setIsCheckingAuth(false);
     }
 
@@ -361,7 +465,7 @@ export default function GmailSyncPage() {
     setSelectedIds([]);
   }
 
-  async function handleScan() {
+  async function handleScan(shouldForceFullScan = false) {
     setScanStatus("loading");
     setErrorMessage("");
     setSaveErrorMessage("");
@@ -401,8 +505,12 @@ export default function GmailSyncPage() {
       return;
     }
 
+    const gmailSearchQuery = buildGmailSearchQuery(
+      syncState,
+      shouldForceFullScan
+    );
     const params = new URLSearchParams({
-      q: GMAIL_SEARCH_QUERY,
+      q: gmailSearchQuery,
       maxResults: "20"
     });
 
@@ -470,7 +578,12 @@ export default function GmailSyncPage() {
           continue;
         }
 
-        const parsed = parseVietcombankReceipt(rawText);
+        const parsed = parseBankReceipt(rawText);
+
+        if (!parsed) {
+          continue;
+        }
+
         const candidate = {
           id: detailData.id ?? message.id,
           subject,
@@ -495,10 +608,74 @@ export default function GmailSyncPage() {
       setScanStatus(
         parsedCandidates.length || manualCandidates.length ? "success" : "empty"
       );
+
+      const syncedAt = new Date().toISOString();
+      const nextSyncState = {
+        user_id: session.user.id,
+        last_synced_at: syncedAt,
+        last_scan_query: gmailSearchQuery,
+        last_scan_result_count: listMessages.length,
+        updated_at: syncedAt
+      };
+      const { error: upsertError } = await getSupabaseClient()
+        .from("gmail_sync_state")
+        .upsert(nextSyncState, { onConflict: "user_id" });
+
+      if (upsertError) {
+        setSyncStateErrorMessage("Đã quét xong nhưng chưa lưu được trạng thái.");
+      } else {
+        setSyncState(nextSyncState);
+        setSyncStateErrorMessage("");
+      }
     } catch {
       setErrorMessage("Không thể kết nối Gmail API. Vui lòng thử lại.");
       setScanStatus("error");
     }
+  }
+
+  async function handleResetSyncState() {
+    const shouldReset = window.confirm(
+      "Bạn có chắc muốn đặt lại lịch sử quét Gmail không?"
+    );
+
+    if (!shouldReset) {
+      return;
+    }
+
+    const configError = getSupabaseConfigError();
+
+    if (configError) {
+      setSyncStateErrorMessage(
+        "Chưa cấu hình Supabase. Vui lòng kiểm tra biến môi trường."
+      );
+      return;
+    }
+
+    const supabase = getSupabaseClient();
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    const user = userData.user;
+
+    if (userError || !user) {
+      setIsLoginRequired(true);
+      setSyncStateErrorMessage("Vui lòng đăng nhập để đặt lại lịch sử quét.");
+      return;
+    }
+
+    setIsResettingSyncState(true);
+    setSyncStateErrorMessage("");
+
+    const { error } = await supabase
+      .from("gmail_sync_state")
+      .delete()
+      .eq("user_id", user.id);
+
+    if (error) {
+      setSyncStateErrorMessage("Không thể đặt lại lịch sử quét Gmail.");
+    } else {
+      setSyncState(null);
+    }
+
+    setIsResettingSyncState(false);
   }
 
   async function handleSaveSelected() {
@@ -558,7 +735,7 @@ export default function GmailSyncPage() {
           parsed.transaction_time,
           candidate.emailDate
         ),
-        transaction_type: "expense",
+        transaction_type: parsed.transaction_type,
         sender_name: parsed.sender_name,
         sender_account: parsed.sender_account,
         receiver_name: parsed.receiver_name,
@@ -567,7 +744,7 @@ export default function GmailSyncPage() {
         description: parsed.description,
         fee: parsed.fee,
         currency: parsed.currency,
-        bank_name: "Vietcombank",
+        bank_name: parsed.bank_name,
         raw_text: candidate.rawText,
         gmail_message_id: candidate.id
       });
@@ -646,24 +823,80 @@ export default function GmailSyncPage() {
                     Trạng thái quét
                   </p>
                   <p className="mt-1 text-sm text-ink/60">
-                    {scanStatus === "idle"
-                      ? "Sẵn sàng quét Gmail."
-                      : scanStatus === "loading"
-                        ? "Đang quét Gmail..."
-                        : scanStatus === "error"
-                          ? "Có lỗi khi quét Gmail."
-                          : scanStatus === "empty"
-                            ? "Không tìm thấy biên lai chuyển khoản phù hợp"
-                            : "Đã quét xong Gmail."}
+                    {getScanStatusMessage(scanStatus)}
                   </p>
                 </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => handleScan()}
+                    disabled={scanStatus === "loading" || isSaving}
+                    className="inline-flex min-h-12 items-center justify-center rounded-full bg-gradient-to-r from-emerald to-mint px-6 text-sm font-semibold text-white shadow-lg shadow-emerald-700/20 transition duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-emerald-700/25 focus:outline-none focus:ring-2 focus:ring-emerald/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:translate-y-0"
+                  >
+                    {scanStatus === "loading" ? "Đang quét..." : "Quét Gmail"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleScan(true)}
+                    disabled={scanStatus === "loading" || isSaving}
+                    className="inline-flex min-h-12 items-center justify-center rounded-full border border-emerald/20 bg-white px-5 text-sm font-semibold text-emerald shadow-lg shadow-emerald-900/5 transition duration-200 hover:-translate-y-0.5 hover:border-emerald/35 hover:bg-leaf focus:outline-none focus:ring-2 focus:ring-emerald/20 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:translate-y-0"
+                  >
+                    Quét lại 365 ngày gần nhất
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-3xl border border-emerald/10 bg-leaf/70 p-5 text-sm text-ink/70">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <p className="font-semibold text-ink">Lần quét gần nhất</p>
+                    <p className="mt-1">
+                      {syncState?.last_synced_at
+                        ? formatDate(syncState.last_synced_at)
+                        : "Chưa từng quét Gmail"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-ink">
+                      Số email tìm thấy lần trước
+                    </p>
+                    <p className="mt-1">
+                      {syncState?.last_scan_result_count ?? 0}
+                    </p>
+                  </div>
+                </div>
+
+                {syncState?.last_scan_query ? (
+                  <details className="mt-4">
+                    <summary className="cursor-pointer font-semibold text-emerald">
+                      Query lần trước
+                    </summary>
+                    <p className="mt-2 break-words rounded-2xl bg-white/80 px-4 py-3 font-mono text-xs leading-5 text-ink/65">
+                      {syncState.last_scan_query}
+                    </p>
+                  </details>
+                ) : null}
+
+                {syncStateErrorMessage ? (
+                  <p className="mt-4 text-sm font-medium text-amber-700">
+                    {syncStateErrorMessage}
+                  </p>
+                ) : null}
+
                 <button
                   type="button"
-                  onClick={handleScan}
-                  disabled={scanStatus === "loading" || isSaving}
-                  className="inline-flex min-h-12 items-center justify-center rounded-full bg-gradient-to-r from-emerald to-mint px-6 text-sm font-semibold text-white shadow-lg shadow-emerald-700/20 transition duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-emerald-700/25 focus:outline-none focus:ring-2 focus:ring-emerald/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:translate-y-0"
+                  onClick={handleResetSyncState}
+                  disabled={
+                    scanStatus === "loading" ||
+                    isSaving ||
+                    isResettingSyncState ||
+                    !syncState
+                  }
+                  className="mt-4 rounded-full border border-red-100 bg-white/80 px-4 py-2 text-xs font-semibold text-red-500 transition hover:border-red-200 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {scanStatus === "loading" ? "Đang quét..." : "Quét Gmail"}
+                  {isResettingSyncState
+                    ? "Đang đặt lại..."
+                    : "Đặt lại lịch sử quét"}
                 </button>
               </div>
 
@@ -734,10 +967,26 @@ export default function GmailSyncPage() {
                               Chọn
                             </label>
                             <div className="min-w-0 flex-1">
-                              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                <p className="break-words text-base font-semibold text-emerald">
-                                  {formatAmount(parsed.amount)}
-                                </p>
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap gap-2">
+                                    <span className="w-fit rounded-full bg-emerald px-3 py-1 text-xs font-semibold text-white">
+                                      {displayValue(parsed.bank_name)}
+                                    </span>
+                                    <span
+                                      className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${transactionTypeBadgeClass(
+                                        parsed.transaction_type
+                                      )}`}
+                                    >
+                                      {transactionTypeLabel(
+                                        parsed.transaction_type
+                                      )}
+                                    </span>
+                                  </div>
+                                  <p className="mt-2 break-words text-base font-semibold text-emerald">
+                                    {formatAmount(parsed.amount)}
+                                  </p>
+                                </div>
                                 {saveStatus ? (
                                   <span
                                     className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${
@@ -760,6 +1009,14 @@ export default function GmailSyncPage() {
                               <dl className="mt-4 grid gap-3 text-sm text-ink/70 sm:grid-cols-2">
                                 <div>
                                   <dt className="font-semibold text-ink">
+                                    Ngân hàng
+                                  </dt>
+                                  <dd className="mt-1 break-words">
+                                    {displayValue(parsed.bank_name)}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="font-semibold text-ink">
                                     Thời gian giao dịch
                                   </dt>
                                   <dd className="mt-1">
@@ -780,6 +1037,22 @@ export default function GmailSyncPage() {
                                   </dt>
                                   <dd className="mt-1 break-words">
                                     {displayValue(parsed.receiver_account)}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="font-semibold text-ink">
+                                    Người gửi
+                                  </dt>
+                                  <dd className="mt-1 break-words">
+                                    {displayValue(parsed.sender_name)}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="font-semibold text-ink">
+                                    Tài khoản người gửi
+                                  </dt>
+                                  <dd className="mt-1 break-words">
+                                    {displayValue(parsed.sender_account)}
                                   </dd>
                                 </div>
                                 <div>

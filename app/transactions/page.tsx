@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
+import {
+  getEffectiveTransactionDate,
+  getVietnamMonthValue
+} from "@/lib/transactionDates";
 
 type Transaction = {
   id: string | number;
@@ -16,6 +20,7 @@ type Transaction = {
 };
 
 const TRANSACTIONS_PAGE_SIZE = 10;
+type SortOption = "newest" | "oldest" | "amount_desc" | "amount_asc";
 
 function formatAmount(amount: number) {
   return `${new Intl.NumberFormat("en-US").format(amount)} VND`;
@@ -23,28 +28,26 @@ function formatAmount(amount: number) {
 
 function formatDate(value: string | null) {
   if (!value) return "Chưa có thời gian";
-  return new Intl.DateTimeFormat("vi-VN", {
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Chưa có thời gian";
+  }
+
+  const time = new Intl.DateTimeFormat("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Ho_Chi_Minh"
+  }).format(date);
+  const day = new Intl.DateTimeFormat("vi-VN", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
-}
+    timeZone: "Asia/Ho_Chi_Minh"
+  }).format(date);
 
-function isValidTransactionDate(value: string | null): boolean {
-  if (!value) return false;
-  const d = new Date(value);
-  return !isNaN(d.getTime()) && d.getFullYear() > 1970;
-}
-
-function getEffectiveDate(
-  transaction_time: string | null,
-  created_at: string | null
-): string | null {
-  return isValidTransactionDate(transaction_time)
-    ? transaction_time
-    : (created_at ?? null);
+  return `${time} ${day}`;
 }
 
 function displayValue(value: string | null) {
@@ -52,10 +55,7 @@ function displayValue(value: string | null) {
 }
 
 function getCurrentMonthValue() {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-
-  return `${now.getFullYear()}-${month}`;
+  return getVietnamMonthValue(new Date()) ?? "";
 }
 
 function formatMonthLabel(value: string) {
@@ -94,8 +94,8 @@ export default function TransactionsPage() {
   >("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState(getCurrentMonthValue);
+  const [sortOption, setSortOption] = useState<SortOption>("newest");
   const [currentPage, setCurrentPage] = useState(1);
-  const [hasNextPage, setHasNextPage] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isLoginRequired, setIsLoginRequired] = useState(false);
 
@@ -112,9 +112,6 @@ export default function TransactionsPage() {
         setIsLoading(false);
         return;
       }
-
-      const from = (currentPage - 1) * TRANSACTIONS_PAGE_SIZE;
-      const to = from + TRANSACTIONS_PAGE_SIZE;
 
       setIsLoading(true);
       setErrorMessage("");
@@ -133,7 +130,6 @@ export default function TransactionsPage() {
       if (userError || !user) {
         setCurrentUserId(null);
         setTransactions([]);
-        setHasNextPage(false);
         setIsLoginRequired(true);
         setIsLoading(false);
         return;
@@ -147,8 +143,7 @@ export default function TransactionsPage() {
           "id, transaction_time, created_at, amount, transaction_type, receiver_name, receiver_bank, category, description"
         )
         .eq("user_id", user.id)
-        .order("transaction_time", { ascending: false })
-        .range(from, to);
+        .order("created_at", { ascending: false });
 
       if (!isCurrentRequest) {
         return;
@@ -157,12 +152,8 @@ export default function TransactionsPage() {
       if (error) {
         setErrorMessage("Không thể tải danh sách giao dịch. Vui lòng thử lại.");
         setTransactions([]);
-        setHasNextPage(false);
       } else {
-        const pagedTransactions = data ?? [];
-
-        setTransactions(pagedTransactions.slice(0, TRANSACTIONS_PAGE_SIZE));
-        setHasNextPage(pagedTransactions.length > TRANSACTIONS_PAGE_SIZE);
+        setTransactions((data ?? []) as Transaction[]);
       }
 
       setIsLoading(false);
@@ -172,7 +163,7 @@ export default function TransactionsPage() {
     return () => {
       isCurrentRequest = false;
     };
-  }, [currentPage]);
+  }, []);
 
   useEffect(() => {
     if (!transactionToDelete) {
@@ -215,12 +206,10 @@ export default function TransactionsPage() {
     const months = new Set([getCurrentMonthValue()]);
 
     transactions.forEach((transaction) => {
-      const effectiveDate = getEffectiveDate(
-        transaction.transaction_time,
-        transaction.created_at
-      );
-      if (effectiveDate) {
-        months.add(effectiveDate.slice(0, 7));
+      const effectiveDate = getEffectiveTransactionDate(transaction);
+      const monthValue = getVietnamMonthValue(effectiveDate);
+      if (monthValue) {
+        months.add(monthValue);
       }
     });
 
@@ -247,23 +236,57 @@ export default function TransactionsPage() {
       const matchesCategory =
         categoryFilter === "all" ||
         transaction.category?.trim() === categoryFilter;
-      const effectiveDate = getEffectiveDate(
-        transaction.transaction_time,
-        transaction.created_at
-      );
+      const effectiveDate = getEffectiveTransactionDate(transaction);
+      const monthValue = getVietnamMonthValue(effectiveDate);
       const matchesMonth =
         monthFilter === "all" ||
-        (effectiveDate ? effectiveDate.slice(0, 7) === monthFilter : false);
+        (monthValue ? monthValue === monthFilter : false);
 
       return matchesSearch && matchesType && matchesCategory && matchesMonth;
     });
   }, [categoryFilter, monthFilter, searchTerm, transactions, typeFilter]);
+
+  const sortedTransactions = useMemo(() => {
+    return [...filteredTransactions].sort((first, second) => {
+      if (sortOption === "amount_desc") {
+        return second.amount - first.amount;
+      }
+
+      if (sortOption === "amount_asc") {
+        return first.amount - second.amount;
+      }
+
+      const firstDate = getEffectiveTransactionDate(first);
+      const secondDate = getEffectiveTransactionDate(second);
+      const missingTime =
+        sortOption === "oldest" ? Number.POSITIVE_INFINITY : 0;
+      const firstTime = firstDate ? new Date(firstDate).getTime() : missingTime;
+      const secondTime = secondDate
+        ? new Date(secondDate).getTime()
+        : missingTime;
+
+      return sortOption === "oldest"
+        ? firstTime - secondTime
+        : secondTime - firstTime;
+    });
+  }, [filteredTransactions, sortOption]);
+
+  const pagedTransactions = useMemo(() => {
+    const start = (currentPage - 1) * TRANSACTIONS_PAGE_SIZE;
+
+    return sortedTransactions.slice(start, start + TRANSACTIONS_PAGE_SIZE);
+  }, [currentPage, sortedTransactions]);
+
+  const hasNextPage =
+    currentPage * TRANSACTIONS_PAGE_SIZE < sortedTransactions.length;
 
   function resetFilters() {
     setSearchTerm("");
     setTypeFilter("all");
     setCategoryFilter("all");
     setMonthFilter(getCurrentMonthValue());
+    setSortOption("newest");
+    setCurrentPage(1);
   }
 
   function goToPreviousPage() {
@@ -408,14 +431,17 @@ export default function TransactionsPage() {
                     </button>
                   </div>
 
-                  <div className="grid gap-3 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
+                  <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr_1fr_1fr_1fr]">
                     <label className="block">
                       <span className="text-sm font-semibold text-ink">
                         Tìm kiếm
                       </span>
                       <input
                         value={searchTerm}
-                        onChange={(event) => setSearchTerm(event.target.value)}
+                        onChange={(event) => {
+                          setSearchTerm(event.target.value);
+                          setCurrentPage(1);
+                        }}
                         type="search"
                         className="mt-2 w-full rounded-2xl border border-emerald/15 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:ring-4 focus:ring-emerald/10"
                         placeholder="Tìm theo người nhận hoặc mô tả..."
@@ -428,11 +454,12 @@ export default function TransactionsPage() {
                       </span>
                       <select
                         value={typeFilter}
-                        onChange={(event) =>
+                        onChange={(event) => {
                           setTypeFilter(
                             event.target.value as typeof typeFilter
-                          )
-                        }
+                          );
+                          setCurrentPage(1);
+                        }}
                         className="mt-2 w-full rounded-2xl border border-emerald/15 bg-white px-4 py-3 text-ink outline-none transition focus:border-emerald focus:ring-4 focus:ring-emerald/10"
                       >
                         <option value="all">Tất cả</option>
@@ -447,9 +474,10 @@ export default function TransactionsPage() {
                       </span>
                       <select
                         value={categoryFilter}
-                        onChange={(event) =>
-                          setCategoryFilter(event.target.value)
-                        }
+                        onChange={(event) => {
+                          setCategoryFilter(event.target.value);
+                          setCurrentPage(1);
+                        }}
                         className="mt-2 w-full rounded-2xl border border-emerald/15 bg-white px-4 py-3 text-ink outline-none transition focus:border-emerald focus:ring-4 focus:ring-emerald/10"
                       >
                         <option value="all">Tất cả danh mục</option>
@@ -467,7 +495,10 @@ export default function TransactionsPage() {
                       </span>
                       <select
                         value={monthFilter}
-                        onChange={(event) => setMonthFilter(event.target.value)}
+                        onChange={(event) => {
+                          setMonthFilter(event.target.value);
+                          setCurrentPage(1);
+                        }}
                         className="mt-2 w-full rounded-2xl border border-emerald/15 bg-white px-4 py-3 text-ink outline-none transition focus:border-emerald focus:ring-4 focus:ring-emerald/10"
                       >
                         <option value="all">Tất cả thời gian</option>
@@ -476,6 +507,25 @@ export default function TransactionsPage() {
                             {formatMonthLabel(month)}
                           </option>
                         ))}
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-sm font-semibold text-ink">
+                        Sắp xếp
+                      </span>
+                      <select
+                        value={sortOption}
+                        onChange={(event) => {
+                          setSortOption(event.target.value as SortOption);
+                          setCurrentPage(1);
+                        }}
+                        className="mt-2 w-full rounded-2xl border border-emerald/15 bg-white px-4 py-3 text-ink outline-none transition focus:border-emerald focus:ring-4 focus:ring-emerald/10"
+                      >
+                        <option value="newest">Mới nhất</option>
+                        <option value="oldest">Cũ nhất</option>
+                        <option value="amount_desc">Số tiền cao nhất</option>
+                        <option value="amount_asc">Số tiền thấp nhất</option>
                       </select>
                     </label>
                   </div>
@@ -507,17 +557,14 @@ export default function TransactionsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-emerald/10">
-                      {filteredTransactions.map((transaction) => (
+                      {pagedTransactions.map((transaction) => (
                         <tr
                           key={transaction.id}
                           className="transition hover:bg-leaf/50"
                         >
                           <td className="px-4 py-4 text-ink/70">
                             {formatDate(
-                              getEffectiveDate(
-                                transaction.transaction_time,
-                                transaction.created_at
-                              )
+                              getEffectiveTransactionDate(transaction)
                             )}
                           </td>
                           <td className="whitespace-nowrap px-4 py-4 font-semibold text-emerald">
@@ -575,7 +622,7 @@ export default function TransactionsPage() {
                 </div>
 
                 <div className="grid gap-4 md:hidden">
-                  {filteredTransactions.map((transaction) => (
+                  {pagedTransactions.map((transaction) => (
                     <article
                       key={transaction.id}
                       className="rounded-3xl border border-emerald/10 bg-white p-5 shadow-lg shadow-emerald-900/5"
@@ -584,10 +631,7 @@ export default function TransactionsPage() {
                         <div>
                           <p className="text-sm text-ink/55">
                             {formatDate(
-                              getEffectiveDate(
-                                transaction.transaction_time,
-                                transaction.created_at
-                              )
+                              getEffectiveTransactionDate(transaction)
                             )}
                           </p>
                           <h2 className="mt-2 font-semibold text-ink">
@@ -734,7 +778,9 @@ export default function TransactionsPage() {
               <div className="flex items-center justify-between gap-4">
                 <dt className="text-ink/55">Thời gian</dt>
                 <dd className="text-right font-medium text-ink">
-                  {formatDate(transactionToDelete.transaction_time)}
+                  {formatDate(
+                    getEffectiveTransactionDate(transactionToDelete)
+                  )}
                 </dd>
               </div>
             </dl>
