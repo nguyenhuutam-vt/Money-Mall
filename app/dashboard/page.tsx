@@ -24,6 +24,18 @@ type CategorySummary = {
   amount: number;
 };
 
+type Budget = {
+  category: string;
+  amount: number | string | null;
+};
+
+type BudgetProgress = {
+  category: string;
+  spentAmount: number;
+  budgetAmount: number;
+  percentage: number;
+};
+
 type ReceiverSummary = {
   name: string;
   amount: number;
@@ -119,6 +131,82 @@ function getSpendingByCategory(transactions: Transaction[]): CategorySummary[] {
   return [...topCategories, { name: "Khác", amount: otherAmount }];
 }
 
+function getExpenseTotalsByCategory(transactions: Transaction[]) {
+  const totals = new Map<string, number>();
+
+  transactions.forEach((transaction) => {
+    if (transaction.transaction_type !== "expense") {
+      return;
+    }
+
+    const amount = Math.abs(getAmount(transaction.amount));
+
+    if (amount <= 0) {
+      return;
+    }
+
+    const category = normalizeCategory(transaction.category);
+    totals.set(category, (totals.get(category) ?? 0) + amount);
+  });
+
+  return totals;
+}
+
+function getBudgetAmount(value: Budget["amount"]) {
+  const amount = Number(value);
+
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function getBudgetProgress(
+  budgets: Budget[],
+  transactions: Transaction[]
+): BudgetProgress[] {
+  const spendingByCategory = getExpenseTotalsByCategory(transactions);
+
+  return budgets.map((budget) => {
+    const budgetAmount = getBudgetAmount(budget.amount);
+    const spentAmount = spendingByCategory.get(budget.category) ?? 0;
+    const percentage =
+      budgetAmount > 0
+        ? Math.round((spentAmount / budgetAmount) * 100)
+        : spentAmount > 0
+          ? 101
+          : 0;
+
+    return {
+      budgetAmount,
+      category: budget.category,
+      percentage,
+      spentAmount
+    };
+  });
+}
+
+function budgetProgressBarClass(percentage: number) {
+  if (percentage > 100) {
+    return "bg-rose-400";
+  }
+
+  if (percentage >= 70) {
+    return "bg-amber-400";
+  }
+
+  return "bg-gradient-to-r from-emerald/70 to-mint";
+}
+
+function budgetProgressTextClass(percentage: number) {
+  if (percentage > 100) {
+    return "text-rose-600";
+  }
+
+  if (percentage >= 70) {
+    return "text-amber-600";
+  }
+
+  return "text-emerald";
+}
+
 function normalizeReceiverName(receiverName: string | null) {
   return receiverName?.trim() || "Không rõ người nhận";
 }
@@ -199,6 +287,29 @@ async function getMonthlyTransactions(userId: string) {
   };
 }
 
+async function getMonthlyBudgets(userId: string) {
+  const configError = getSupabaseConfigError();
+
+  if (configError) {
+    return { data: null, error: new Error(configError) };
+  }
+
+  const currentMonth = getVietnamMonthValue(new Date());
+
+  const { data, error } = await getSupabaseClient()
+    .from("budgets")
+    .select("category, amount")
+    .eq("user_id", userId)
+    .eq("month", currentMonth)
+    .order("category", { ascending: true });
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  return { data: (data ?? []) as Budget[], error: null };
+}
+
 async function getLatestTransactions(userId: string) {
   const configError = getSupabaseConfigError();
 
@@ -242,6 +353,7 @@ export default function DashboardPage() {
   const [latestTransactions, setLatestTransactions] = useState<Transaction[]>(
     []
   );
+  const [monthlyBudgets, setMonthlyBudgets] = useState<Budget[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoginRequired, setIsLoginRequired] = useState(false);
@@ -277,23 +389,27 @@ export default function DashboardPage() {
 
       const [
         { data: monthlyData, error: monthlyError },
-        { data: latestData, error: latestError }
+        { data: latestData, error: latestError },
+        { data: budgetData, error: budgetError }
       ] = await Promise.all([
         getMonthlyTransactions(user.id),
-        getLatestTransactions(user.id)
+        getLatestTransactions(user.id),
+        getMonthlyBudgets(user.id)
       ]);
 
       if (!isCurrentRequest) {
         return;
       }
 
-      if (monthlyError || latestError) {
+      if (monthlyError || latestError || budgetError) {
         setErrorMessage("Không thể tải dashboard. Vui lòng thử lại.");
         setMonthlyTransactions([]);
         setLatestTransactions([]);
+        setMonthlyBudgets([]);
       } else {
         setMonthlyTransactions((monthlyData ?? []) as Transaction[]);
         setLatestTransactions((latestData ?? []) as Transaction[]);
+        setMonthlyBudgets((budgetData ?? []) as Budget[]);
       }
 
       setIsLoading(false);
@@ -338,6 +454,10 @@ export default function DashboardPage() {
     0
   );
   const topReceivers = getTopReceivers(monthlyTransactions);
+  const budgetProgressItems = getBudgetProgress(
+    monthlyBudgets,
+    monthlyTransactions
+  );
 
   const stats = [
     {
@@ -369,8 +489,8 @@ export default function DashboardPage() {
   ];
 
   return (
-    <main className="min-h-screen bg-[linear-gradient(135deg,#f0fdf4_0%,#ffffff_48%,#ecfdf5_100%)] px-6 py-8 text-ink sm:py-12">
-      <section className="mx-auto max-w-6xl">
+    <main className="min-h-screen bg-[linear-gradient(135deg,#f0fdf4_0%,#ffffff_48%,#ecfdf5_100%)] px-4 py-8 text-ink sm:px-6 sm:py-12 lg:px-8">
+      <section className="mx-auto max-w-[1400px]">
         <div className="mb-6 rounded-[2rem] border border-white/80 bg-white/75 p-6 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-8 animate-fade-up">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="max-w-2xl">
@@ -432,25 +552,9 @@ export default function DashboardPage() {
               {errorMessage}
             </p>
           </div>
-        ) : monthlyTransactions.length === 0 && latestTransactions.length === 0 ? (
-          <div className="rounded-[2rem] border border-emerald/10 bg-white/90 p-8 text-center shadow-2xl shadow-emerald-900/10 backdrop-blur animate-fade-up animation-delay-150">
-            <p className="text-lg font-semibold text-ink">
-              Tháng này chưa có giao dịch nào
-            </p>
-            <p className="mx-auto mt-3 max-w-xl leading-7 text-ink/60">
-              Hãy thêm giao dịch đầu tiên để dashboard bắt đầu tổng hợp chi
-              tiêu trong tháng.
-            </p>
-            <Link
-              href="/transactions/new"
-              className="mt-6 inline-flex rounded-full bg-gradient-to-r from-emerald to-mint px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:-translate-y-1 hover:shadow-xl hover:shadow-emerald-600/30"
-            >
-              Thêm giao dịch
-            </Link>
-          </div>
         ) : (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
-            <div className="space-y-5">
+          <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
+            <div className="space-y-5 lg:col-span-7 xl:col-span-8">
               <div className="grid gap-4 sm:grid-cols-2">
                 {stats.map((stat, index) => (
                   <article
@@ -470,6 +574,78 @@ export default function DashboardPage() {
                   </article>
                 ))}
               </div>
+
+              <section className="rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-6 animate-fade-up animation-delay-500">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-ink sm:text-xl">
+                      Ngân sách tháng
+                    </h2>
+                    <p className="mt-1 text-sm text-ink/55">
+                      Theo dõi mức chi so với giới hạn đã đặt
+                    </p>
+                  </div>
+                  {monthlyBudgets.length > 0 ? (
+                    <Link
+                      href="/budgets"
+                      className="w-fit rounded-full border border-emerald/15 bg-emerald/10 px-3 py-1.5 text-xs font-semibold text-emerald transition hover:border-emerald/30 hover:bg-emerald/15"
+                    >
+                      Chỉnh sửa
+                    </Link>
+                  ) : null}
+                </div>
+
+                {budgetProgressItems.length === 0 ? (
+                  <div className="mt-5 rounded-3xl border border-dashed border-emerald/20 bg-leaf/55 px-4 py-6 text-center">
+                    <p className="text-sm font-semibold text-ink/65">
+                      Chưa đặt ngân sách cho tháng này
+                    </p>
+                    <Link
+                      href="/budgets"
+                      className="mt-4 inline-flex rounded-full bg-gradient-to-r from-emerald to-mint px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-emerald-600/30"
+                    >
+                      Đặt ngân sách
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="mt-5 space-y-4">
+                    {budgetProgressItems.map((budget) => {
+                      const progressWidth = Math.min(budget.percentage, 100);
+
+                      return (
+                        <div key={budget.category}>
+                          <div className="mb-2 flex flex-col gap-2 text-sm sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-ink">
+                                {budget.category}
+                              </p>
+                              <p className="mt-0.5 text-xs text-ink/50">
+                                Đã chi {formatAmount(budget.spentAmount)} /
+                                ngân sách {formatAmount(budget.budgetAmount)}
+                              </p>
+                            </div>
+                            <p
+                              className={`shrink-0 font-semibold ${budgetProgressTextClass(
+                                budget.percentage
+                              )}`}
+                            >
+                              {budget.percentage}% đã dùng
+                            </p>
+                          </div>
+                          <div className="h-2.5 overflow-hidden rounded-full bg-emerald/10">
+                            <div
+                              className={`h-full rounded-full ${budgetProgressBarClass(
+                                budget.percentage
+                              )}`}
+                              style={{ width: `${progressWidth}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
 
               <section className="rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-6 animate-fade-up animation-delay-500">
                 <div>
@@ -565,7 +741,7 @@ export default function DashboardPage() {
               </section>
             </div>
 
-            <section className="self-start rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-6 animate-fade-up animation-delay-300">
+            <section className="self-start rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-6 lg:col-span-5 xl:col-span-4 animate-fade-up animation-delay-300">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-ink sm:text-xl">
@@ -583,50 +759,60 @@ export default function DashboardPage() {
                 </Link>
               </div>
 
-              <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
-                {latestTransactions.map((transaction) => {
-                  const title =
-                    transaction.description ||
-                    transaction.receiver_name ||
-                    transaction.category;
+              {latestTransactions.length === 0 ? (
+                <p className="rounded-3xl border border-dashed border-emerald/20 bg-leaf/55 px-4 py-5 text-center text-sm font-medium text-ink/55">
+                  Chưa có giao dịch gần đây
+                </p>
+              ) : (
+                <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
+                  {latestTransactions.map((transaction) => {
+                    const title =
+                      transaction.description ||
+                      transaction.receiver_name ||
+                      transaction.category;
 
-                  return (
-                    <article
-                      key={transaction.id}
-                      className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-2xl border border-emerald/10 bg-leaf/55 p-3 shadow-sm shadow-emerald-900/5 transition duration-300 hover:bg-white hover:shadow-md hover:shadow-emerald-900/10 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"
-                    >
-                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-xs font-semibold text-emerald shadow-sm">
-                        {displayValue(transaction.category).slice(0, 1)}
-                      </div>
-
-                      <div className="min-w-0">
-                        <h3 className="truncate text-sm font-semibold text-ink">
-                          {displayValue(title)}
-                        </h3>
-                        <p className="mt-0.5 text-xs text-ink/55">
-                          {formatDate(getEffectiveTransactionDate(transaction))}
-                        </p>
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          <span className="max-w-full truncate rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-emerald">
-                            {displayValue(transaction.category)}
-                          </span>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${transactionTypeBadgeClass(
-                              transaction.transaction_type
-                            )}`}
-                          >
-                            {transactionTypeLabel(transaction.transaction_type)}
-                          </span>
+                    return (
+                      <article
+                        key={transaction.id}
+                        className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-2xl border border-emerald/10 bg-leaf/55 p-3 shadow-sm shadow-emerald-900/5 transition duration-300 hover:bg-white hover:shadow-md hover:shadow-emerald-900/10 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"
+                      >
+                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-xs font-semibold text-emerald shadow-sm">
+                          {displayValue(transaction.category).slice(0, 1)}
                         </div>
-                      </div>
 
-                      <p className="col-span-2 whitespace-nowrap text-left text-sm font-semibold text-emerald sm:col-span-1 sm:text-right">
-                        {formatAmount(getAmount(transaction.amount))}
-                      </p>
-                    </article>
-                  );
-                })}
-              </div>
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-semibold text-ink">
+                            {displayValue(title)}
+                          </h3>
+                          <p className="mt-0.5 text-xs text-ink/55">
+                            {formatDate(
+                              getEffectiveTransactionDate(transaction)
+                            )}
+                          </p>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            <span className="max-w-full truncate rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-emerald">
+                              {displayValue(transaction.category)}
+                            </span>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${transactionTypeBadgeClass(
+                                transaction.transaction_type
+                              )}`}
+                            >
+                              {transactionTypeLabel(
+                                transaction.transaction_type
+                              )}
+                            </span>
+                          </div>
+                        </div>
+
+                        <p className="col-span-2 whitespace-nowrap text-left text-sm font-semibold text-emerald sm:col-span-1 sm:text-right">
+                          {formatAmount(getAmount(transaction.amount))}
+                        </p>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           </div>
         )}
