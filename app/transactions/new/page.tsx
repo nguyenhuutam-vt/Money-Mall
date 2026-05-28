@@ -143,6 +143,7 @@ export default function NewTransactionPage() {
               submitLabel="Lưu giao dịch"
               submittingLabel="Đang lưu..."
               onSubmit={handleSubmit}
+              enableCategorySuggestion
             />
           )}
         </div>

@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
+  suggestTransactionCategory,
+  type TransactionCategory
+} from "@/lib/categorization";
+import {
   parseBankReceipt,
   type ParsedBankReceipt
 } from "@/lib/parsers";
@@ -51,6 +55,8 @@ type ReceiptCandidate = {
   emailDate: string;
   rawText: string;
   parsed: ParsedBankReceipt;
+  category: string | null;
+  suggestedCategory: TransactionCategory;
 };
 
 type FailedCandidate = ReceiptCandidate & {
@@ -83,6 +89,7 @@ const RECEIPT_SEARCH_QUERY =
   '("Biên lai chuyển tiền" OR "Payment Receipt" OR (Vietcombank ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")) OR (Techcombank ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")) OR (("MB Bank" OR MBBank) ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")))';
 const DEFAULT_GMAIL_SEARCH_QUERY = `newer_than:365d ${RECEIPT_SEARCH_QUERY}`;
 const RECEIPT_SCORE_THRESHOLD = 3;
+const UNCATEGORIZED_LABEL = "Chưa có";
 
 function getGmailErrorMessage(data: unknown) {
   if (
@@ -344,6 +351,27 @@ function displayValue(value: string | null) {
   return value?.trim() ? value : "Chưa có";
 }
 
+function isMissingCategory(category: string | null | undefined) {
+  return (
+    !category?.trim() ||
+    category.trim().toLocaleLowerCase("vi-VN") ===
+      UNCATEGORIZED_LABEL.toLocaleLowerCase("vi-VN")
+  );
+}
+
+function getFinalCategory(
+  category: string | null | undefined,
+  suggestedCategory: TransactionCategory
+) {
+  const trimmedCategory = category?.trim();
+
+  if (isMissingCategory(trimmedCategory)) {
+    return suggestedCategory;
+  }
+
+  return trimmedCategory ?? suggestedCategory;
+}
+
 function transactionTypeLabel(type: ParsedBankReceipt["transaction_type"]) {
   return type === "income" ? "Thu nhập" : "Chi tiêu";
 }
@@ -584,12 +612,15 @@ export default function GmailSyncPage() {
           continue;
         }
 
+        const suggestedCategory = suggestTransactionCategory(parsed);
         const candidate = {
           id: detailData.id ?? message.id,
           subject,
           emailDate,
           rawText,
-          parsed
+          parsed,
+          category: null,
+          suggestedCategory
         };
 
         if (parsed.amount) {
@@ -721,6 +752,10 @@ export default function GmailSyncPage() {
 
     for (const candidate of selectedCandidates) {
       const { parsed } = candidate;
+      const finalCategory = getFinalCategory(
+        candidate.category,
+        candidate.suggestedCategory
+      );
 
       if (!parsed.amount) {
         nextStatuses[candidate.id] = "error";
@@ -745,6 +780,7 @@ export default function GmailSyncPage() {
         fee: parsed.fee,
         currency: parsed.currency,
         bank_name: parsed.bank_name,
+        category: finalCategory,
         raw_text: candidate.rawText,
         gmail_message_id: candidate.id
       });
@@ -949,6 +985,10 @@ export default function GmailSyncPage() {
                       const { parsed } = candidate;
                       const isSelected = selectedIds.includes(candidate.id);
                       const saveStatus = saveStatuses[candidate.id];
+                      const finalCategory = getFinalCategory(
+                        candidate.category,
+                        candidate.suggestedCategory
+                      );
 
                       return (
                         <li
@@ -981,6 +1021,9 @@ export default function GmailSyncPage() {
                                       {transactionTypeLabel(
                                         parsed.transaction_type
                                       )}
+                                    </span>
+                                    <span className="w-fit rounded-full bg-leaf px-3 py-1 text-xs font-semibold text-emerald">
+                                      {finalCategory}
                                     </span>
                                   </div>
                                   <p className="mt-2 break-words text-base font-semibold text-emerald">
@@ -1067,6 +1110,14 @@ export default function GmailSyncPage() {
                                   <dt className="font-semibold text-ink">Phí</dt>
                                   <dd className="mt-1">
                                     {formatAmount(parsed.fee)}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="font-semibold text-ink">
+                                    Danh mục gợi ý
+                                  </dt>
+                                  <dd className="mt-1 break-words">
+                                    {candidate.suggestedCategory}
                                   </dd>
                                 </div>
                                 <div>

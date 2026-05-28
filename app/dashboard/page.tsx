@@ -19,6 +19,17 @@ type Transaction = {
   description: string | null;
 };
 
+type CategorySummary = {
+  name: string;
+  amount: number;
+};
+
+type ReceiverSummary = {
+  name: string;
+  amount: number;
+  count: number;
+};
+
 function formatAmount(amount: number) {
   return new Intl.NumberFormat("vi-VN", {
     style: "currency",
@@ -58,6 +69,91 @@ function getAmount(value: Transaction["amount"]) {
   const amount = Number(value);
 
   return Number.isFinite(amount) ? amount : 0;
+}
+
+function normalizeCategory(category: string | null) {
+  const trimmedCategory = category?.trim();
+
+  if (
+    !trimmedCategory ||
+    trimmedCategory.toLocaleLowerCase("vi-VN") === "chưa có"
+  ) {
+    return "Chưa phân loại";
+  }
+
+  return trimmedCategory;
+}
+
+function getSpendingByCategory(transactions: Transaction[]): CategorySummary[] {
+  const totals = new Map<string, number>();
+
+  transactions.forEach((transaction) => {
+    if (transaction.transaction_type !== "expense") {
+      return;
+    }
+
+    const amount = Math.abs(getAmount(transaction.amount));
+
+    if (amount <= 0) {
+      return;
+    }
+
+    const category = normalizeCategory(transaction.category);
+    totals.set(category, (totals.get(category) ?? 0) + amount);
+  });
+
+  const sortedCategories = Array.from(totals, ([name, amount]) => ({
+    name,
+    amount
+  })).sort((first, second) => second.amount - first.amount);
+
+  if (sortedCategories.length <= 6) {
+    return sortedCategories;
+  }
+
+  const topCategories = sortedCategories.slice(0, 6);
+  const otherAmount = sortedCategories
+    .slice(6)
+    .reduce((total, category) => total + category.amount, 0);
+
+  return [...topCategories, { name: "Khác", amount: otherAmount }];
+}
+
+function normalizeReceiverName(receiverName: string | null) {
+  return receiverName?.trim() || "Không rõ người nhận";
+}
+
+function getTopReceivers(transactions: Transaction[]): ReceiverSummary[] {
+  const totals = new Map<string, ReceiverSummary>();
+
+  transactions.forEach((transaction) => {
+    if (transaction.transaction_type !== "expense") {
+      return;
+    }
+
+    const amount = Math.abs(getAmount(transaction.amount));
+
+    if (amount <= 0) {
+      return;
+    }
+
+    const receiverName = normalizeReceiverName(transaction.receiver_name);
+    const currentSummary = totals.get(receiverName) ?? {
+      name: receiverName,
+      amount: 0,
+      count: 0
+    };
+
+    totals.set(receiverName, {
+      ...currentSummary,
+      amount: currentSummary.amount + amount,
+      count: currentSummary.count + 1
+    });
+  });
+
+  return Array.from(totals.values())
+    .sort((first, second) => second.amount - first.amount)
+    .slice(0, 5);
 }
 
 function transactionTypeLabel(type: Transaction["transaction_type"]) {
@@ -236,6 +332,12 @@ export default function DashboardPage() {
     },
     null
   );
+  const categorySummaries = getSpendingByCategory(monthlyTransactions);
+  const categoryTotalExpense = categorySummaries.reduce(
+    (total, category) => total + category.amount,
+    0
+  );
+  const topReceivers = getTopReceivers(monthlyTransactions);
 
   const stats = [
     {
@@ -347,43 +449,141 @@ export default function DashboardPage() {
             </Link>
           </div>
         ) : (
-          <div className="grid gap-6 lg:grid-cols-[1fr_1.15fr]">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
-              {stats.map((stat, index) => (
-                <article
-                  key={stat.label}
-                  className="rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-2xl hover:shadow-emerald-900/10 animate-fade-up"
-                  style={{ animationDelay: `${150 + index * 100}ms` }}
-                >
-                  <p className="text-sm font-semibold text-ink/55">
-                    {stat.label}
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
+            <div className="space-y-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                {stats.map((stat, index) => (
+                  <article
+                    key={stat.label}
+                    className="rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-2xl hover:shadow-emerald-900/10 animate-fade-up"
+                    style={{ animationDelay: `${150 + index * 100}ms` }}
+                  >
+                    <p className="text-sm font-semibold text-ink/55">
+                      {stat.label}
+                    </p>
+                    <p className="mt-3 text-2xl font-semibold text-ink">
+                      {stat.value}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/55">
+                      {stat.note}
+                    </p>
+                  </article>
+                ))}
+              </div>
+
+              <section className="rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-6 animate-fade-up animation-delay-500">
+                <div>
+                  <h2 className="text-lg font-semibold text-ink sm:text-xl">
+                    Chi tiêu theo danh mục
+                  </h2>
+                  <p className="mt-1 text-sm text-ink/55">
+                    Các nhóm chi tiêu lớn nhất trong tháng
                   </p>
-                  <p className="mt-3 text-2xl font-semibold text-ink">
-                    {stat.value}
+                </div>
+
+                {categorySummaries.length === 0 ? (
+                  <p className="mt-5 rounded-3xl border border-dashed border-emerald/20 bg-leaf/55 px-4 py-5 text-center text-sm font-medium text-ink/55">
+                    Chưa có dữ liệu chi tiêu theo danh mục
                   </p>
-                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/55">
-                    {stat.note}
+                ) : (
+                  <div className="mt-5 space-y-4">
+                    {categorySummaries.map((category) => {
+                      const percentage =
+                        categoryTotalExpense > 0
+                          ? Math.round(
+                              (category.amount / categoryTotalExpense) * 100
+                            )
+                          : 0;
+
+                      return (
+                        <div key={category.name}>
+                          <div className="mb-2 flex items-start justify-between gap-3 text-sm">
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-ink">
+                                {category.name}
+                              </p>
+                              <p className="mt-0.5 text-xs text-ink/50">
+                                {percentage}% tổng chi tiêu
+                              </p>
+                            </div>
+                            <p className="shrink-0 text-right font-semibold text-emerald">
+                              {formatAmount(category.amount)}
+                            </p>
+                          </div>
+                          <div className="h-2.5 overflow-hidden rounded-full bg-emerald/10">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-emerald/70 to-mint"
+                              style={{ width: `${percentage}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-6 animate-fade-up animation-delay-500">
+                <div>
+                  <h2 className="text-lg font-semibold text-ink sm:text-xl">
+                    Chi nhiều nhất cho ai?
+                  </h2>
+                  <p className="mt-1 text-sm text-ink/55">
+                    Top người nhận trong tháng
                   </p>
-                </article>
-              ))}
+                </div>
+
+                {topReceivers.length === 0 ? (
+                  <p className="mt-5 rounded-3xl border border-dashed border-emerald/20 bg-leaf/55 px-4 py-5 text-center text-sm font-medium text-ink/55">
+                    Chưa có dữ liệu chi tiêu
+                  </p>
+                ) : (
+                  <div className="mt-5 grid gap-3 md:grid-cols-2">
+                    {topReceivers.map((receiver, index) => (
+                      <article
+                        key={receiver.name}
+                        className="flex min-w-0 gap-3 rounded-3xl border border-emerald/10 bg-leaf/55 p-4 shadow-sm shadow-emerald-900/5"
+                      >
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-sm font-semibold text-emerald shadow-sm">
+                          {index + 1}
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="truncate font-semibold text-ink">
+                            {receiver.name}
+                          </h3>
+                          <p className="mt-1 text-xs font-medium text-ink/50">
+                            {receiver.count} giao dịch
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-emerald">
+                            {formatAmount(receiver.amount)}
+                          </p>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
             </div>
 
-            <section className="rounded-[2rem] border border-emerald/10 bg-white/90 p-5 shadow-2xl shadow-emerald-900/10 backdrop-blur sm:p-6 animate-fade-up animation-delay-300">
-              <div className="mb-5 flex items-center justify-between gap-4">
+            <section className="self-start rounded-[1.5rem] border border-emerald/10 bg-white/90 p-5 shadow-xl shadow-emerald-900/5 backdrop-blur sm:p-6 animate-fade-up animation-delay-300">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h2 className="text-xl font-semibold text-ink">
+                  <h2 className="text-lg font-semibold text-ink sm:text-xl">
                     Giao dịch gần đây
                   </h2>
                   <p className="mt-1 text-sm text-ink/55">
                     5 giao dịch mới nhất
                   </p>
                 </div>
-                <span className="rounded-full bg-emerald/10 px-3 py-1 text-xs font-semibold text-emerald">
-                  {latestTransactions.length} giao dịch
-                </span>
+                <Link
+                  href="/transactions"
+                  className="w-fit rounded-full border border-emerald/15 bg-emerald/10 px-3 py-1.5 text-xs font-semibold text-emerald transition hover:border-emerald/30 hover:bg-emerald/15"
+                >
+                  Xem tất cả
+                </Link>
               </div>
 
-              <div className="space-y-3">
+              <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
                 {latestTransactions.map((transaction) => {
                   const title =
                     transaction.description ||
@@ -393,27 +593,25 @@ export default function DashboardPage() {
                   return (
                     <article
                       key={transaction.id}
-                      className="grid grid-cols-[auto_1fr] gap-3 rounded-3xl border border-emerald/10 bg-leaf/55 p-4 shadow-sm shadow-emerald-900/5 transition duration-300 hover:-translate-y-1 hover:bg-white hover:shadow-lg hover:shadow-emerald-900/10 sm:grid-cols-[auto_1fr_auto]"
+                      className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-2xl border border-emerald/10 bg-leaf/55 p-3 shadow-sm shadow-emerald-900/5 transition duration-300 hover:bg-white hover:shadow-md hover:shadow-emerald-900/10 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"
                     >
-                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-sm font-semibold text-emerald shadow-sm">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-xs font-semibold text-emerald shadow-sm">
                         {displayValue(transaction.category).slice(0, 1)}
                       </div>
 
                       <div className="min-w-0">
-                        <h3 className="truncate font-semibold text-ink">
+                        <h3 className="truncate text-sm font-semibold text-ink">
                           {displayValue(title)}
                         </h3>
-                        <p className="mt-1 text-sm text-ink/55">
-                          {formatDate(
-                            getEffectiveTransactionDate(transaction)
-                          )}
+                        <p className="mt-0.5 text-xs text-ink/55">
+                          {formatDate(getEffectiveTransactionDate(transaction))}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-emerald">
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          <span className="max-w-full truncate rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-emerald">
                             {displayValue(transaction.category)}
                           </span>
                           <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${transactionTypeBadgeClass(
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${transactionTypeBadgeClass(
                               transaction.transaction_type
                             )}`}
                           >
@@ -422,7 +620,7 @@ export default function DashboardPage() {
                         </div>
                       </div>
 
-                      <p className="col-span-2 whitespace-nowrap text-left font-semibold text-emerald sm:col-span-1 sm:text-right">
+                      <p className="col-span-2 whitespace-nowrap text-left text-sm font-semibold text-emerald sm:col-span-1 sm:text-right">
                         {formatAmount(getAmount(transaction.amount))}
                       </p>
                     </article>

@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEventHandler } from "react";
+import { FormEventHandler, useState } from "react";
+import { suggestTransactionCategory } from "@/lib/categorization";
 
 export type TransactionFormValues = {
   transaction_type?: "expense" | "income" | null;
@@ -19,6 +20,7 @@ type TransactionFormProps = {
   submitLabel: string;
   submittingLabel: string;
   onSubmit: FormEventHandler<HTMLFormElement>;
+  enableCategorySuggestion?: boolean;
   showCancel?: boolean;
 };
 
@@ -33,6 +35,14 @@ function formatDateTimeLocal(value?: string) {
   return localDate.toISOString().slice(0, 16);
 }
 
+function isMissingCategory(category: string) {
+  return (
+    !category.trim() ||
+    category.trim().toLocaleLowerCase("vi-VN") ===
+      "Chưa có".toLocaleLowerCase("vi-VN")
+  );
+}
+
 export default function TransactionForm({
   initialValues,
   isSubmitting,
@@ -40,8 +50,47 @@ export default function TransactionForm({
   submitLabel,
   submittingLabel,
   onSubmit,
+  enableCategorySuggestion = false,
   showCancel = false
 }: TransactionFormProps) {
+  const initialTransactionType = initialValues?.transaction_type ?? "expense";
+  const initialReceiverName = initialValues?.receiver_name ?? "";
+  const initialDescription = initialValues?.description ?? "";
+  const initialCategory = initialValues?.category ?? "";
+  const [transactionType, setTransactionType] = useState(initialTransactionType);
+  const [receiverName, setReceiverName] = useState(initialReceiverName);
+  const [description, setDescription] = useState(initialDescription);
+  const [category, setCategory] = useState(() => {
+    if (!enableCategorySuggestion || !isMissingCategory(initialCategory)) {
+      return initialCategory;
+    }
+
+    return suggestTransactionCategory({
+      receiver_name: initialReceiverName,
+      description: initialDescription,
+      transaction_type: initialTransactionType
+    });
+  });
+  const [hasEditedCategory, setHasEditedCategory] = useState(false);
+
+  function updateSuggestedCategory(
+    nextTransactionType: "expense" | "income",
+    nextReceiverName: string,
+    nextDescription: string
+  ) {
+    if (!enableCategorySuggestion || hasEditedCategory) {
+      return;
+    }
+
+    setCategory(
+      suggestTransactionCategory({
+        receiver_name: nextReceiverName,
+        description: nextDescription,
+        transaction_type: nextTransactionType
+      })
+    );
+  }
+
   return (
     <form className="space-y-6" onSubmit={onSubmit}>
       <label className="block">
@@ -49,7 +98,18 @@ export default function TransactionForm({
         <select
           required
           name="transaction_type"
-          defaultValue={initialValues?.transaction_type ?? "expense"}
+          value={transactionType}
+          onChange={(event) => {
+            const nextTransactionType =
+              event.target.value === "income" ? "income" : "expense";
+
+            setTransactionType(nextTransactionType);
+            updateSuggestedCategory(
+              nextTransactionType,
+              receiverName,
+              description
+            );
+          }}
           className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
         >
           <option value="expense">Chi tiêu</option>
@@ -91,7 +151,17 @@ export default function TransactionForm({
           <input
             name="receiver_name"
             type="text"
-            defaultValue={initialValues?.receiver_name ?? ""}
+            value={receiverName}
+            onChange={(event) => {
+              const nextReceiverName = event.target.value;
+
+              setReceiverName(nextReceiverName);
+              updateSuggestedCategory(
+                transactionType,
+                nextReceiverName,
+                description
+              );
+            }}
             className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
             placeholder="Nguyễn Văn A"
           />
@@ -116,10 +186,19 @@ export default function TransactionForm({
         <input
           name="category"
           type="text"
-          defaultValue={initialValues?.category ?? ""}
+          value={category}
+          onChange={(event) => {
+            setHasEditedCategory(true);
+            setCategory(event.target.value);
+          }}
           className="mt-2 w-full rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
           placeholder="Ăn uống"
         />
+        {enableCategorySuggestion ? (
+          <p className="mt-2 text-xs font-medium text-emerald">
+            Gợi ý tự động, bạn có thể sửa lại
+          </p>
+        ) : null}
       </label>
 
       <label className="block">
@@ -127,7 +206,17 @@ export default function TransactionForm({
         <textarea
           name="description"
           rows={4}
-          defaultValue={initialValues?.description ?? ""}
+          value={description}
+          onChange={(event) => {
+            const nextDescription = event.target.value;
+
+            setDescription(nextDescription);
+            updateSuggestedCategory(
+              transactionType,
+              receiverName,
+              nextDescription
+            );
+          }}
           className="mt-2 w-full resize-none rounded-2xl border border-emerald/15 bg-leaf/40 px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-emerald focus:bg-white focus:ring-4 focus:ring-emerald/10"
           placeholder="Ghi chú ngắn cho giao dịch"
         />
