@@ -57,6 +57,7 @@ type ReceiptCandidate = {
   parsed: ParsedBankReceipt;
   category: string | null;
   suggestedCategory: TransactionCategory;
+  isTransactionTypeUncertain: boolean;
 };
 
 type FailedCandidate = ReceiptCandidate & {
@@ -84,6 +85,12 @@ type GmailSyncState = {
   last_scan_result_count: number | null;
   updated_at: string | null;
 };
+
+type BankAccount = {
+  account_number: string | null;
+};
+
+type TransactionType = ParsedBankReceipt["transaction_type"];
 
 const RECEIPT_SEARCH_QUERY =
   '("Biên lai chuyển tiền" OR "Payment Receipt" OR (Vietcombank ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")) OR (Techcombank ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")) OR (("MB Bank" OR MBBank) ("giao dịch" OR "số tiền" OR Amount OR "ghi Có" OR "ghi Nợ" OR "chuyển tiền" OR "nhận tiền")))';
@@ -351,6 +358,41 @@ function displayValue(value: string | null) {
   return value?.trim() ? value : "Chưa có";
 }
 
+function normalizeAccountNumber(value: string | null | undefined) {
+  return value?.trim().replace(/[\s.-]/g, "") ?? "";
+}
+
+function detectTransactionType(
+  parsed: ParsedBankReceipt,
+  ownAccountNumbers: Set<string>
+) {
+  const senderAccount = normalizeAccountNumber(parsed.sender_account);
+  const receiverAccount = normalizeAccountNumber(parsed.receiver_account);
+  const isOwnSender =
+    Boolean(senderAccount) && ownAccountNumbers.has(senderAccount);
+  const isOwnReceiver =
+    Boolean(receiverAccount) && ownAccountNumbers.has(receiverAccount);
+
+  if (isOwnSender && !isOwnReceiver) {
+    return {
+      isTransactionTypeUncertain: false,
+      transactionType: "expense" as const
+    };
+  }
+
+  if (isOwnReceiver && !isOwnSender) {
+    return {
+      isTransactionTypeUncertain: false,
+      transactionType: "income" as const
+    };
+  }
+
+  return {
+    isTransactionTypeUncertain: true,
+    transactionType: parsed.transaction_type
+  };
+}
+
 function isMissingCategory(category: string | null | undefined) {
   return (
     !category?.trim() ||
@@ -380,6 +422,12 @@ function transactionTypeBadgeClass(type: ParsedBankReceipt["transaction_type"]) 
   return type === "income"
     ? "bg-emerald/10 text-emerald"
     : "bg-amber-50 text-amber-700";
+}
+
+function transactionTypeChoiceClass(isSelected: boolean) {
+  return isSelected
+    ? "border-emerald bg-emerald text-white shadow-md shadow-emerald-700/15"
+    : "border-emerald/20 bg-white text-emerald hover:border-emerald/35 hover:bg-leaf";
 }
 
 function isDuplicateError(errorMessage: string, errorCode?: string) {
@@ -414,6 +462,9 @@ export default function GmailSyncPage() {
     []
   );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedTransactionTypes, setSelectedTransactionTypes] = useState<
+    Record<string, TransactionType>
+  >({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatuses, setSaveStatuses] = useState<
     Record<string, SaveItemStatus>
@@ -478,6 +529,17 @@ export default function GmailSyncPage() {
   }, []);
 
   function toggleCandidate(id: string) {
+    const candidate = candidates.find(
+      (currentCandidate) => currentCandidate.id === id
+    );
+
+    if (
+      candidate?.isTransactionTypeUncertain &&
+      !selectedTransactionTypes[id]
+    ) {
+      return;
+    }
+
     setSelectedIds((current) =>
       current.includes(id)
         ? current.filter((currentId) => currentId !== id)
@@ -486,11 +548,42 @@ export default function GmailSyncPage() {
   }
 
   function selectAllCandidates() {
-    setSelectedIds(candidates.map((candidate) => candidate.id));
+    setSelectedIds(
+      candidates
+        .filter(
+          (candidate) =>
+            !candidate.isTransactionTypeUncertain ||
+            selectedTransactionTypes[candidate.id]
+        )
+        .map((candidate) => candidate.id)
+    );
   }
 
   function clearSelectedCandidates() {
     setSelectedIds([]);
+  }
+
+  function chooseTransactionType(id: string, transactionType: TransactionType) {
+    setSelectedTransactionTypes((current) => ({
+      ...current,
+      [id]: transactionType
+    }));
+  }
+
+  function getCandidateTransactionType(candidate: ReceiptCandidate) {
+    return (
+      selectedTransactionTypes[candidate.id] ?? candidate.parsed.transaction_type
+    );
+  }
+
+  function getCandidateFinalCategory(candidate: ReceiptCandidate) {
+    return getFinalCategory(
+      candidate.category,
+      suggestTransactionCategory({
+        ...candidate.parsed,
+        transaction_type: getCandidateTransactionType(candidate)
+      })
+    );
   }
 
   async function handleScan(shouldForceFullScan = false) {
@@ -500,6 +593,7 @@ export default function GmailSyncPage() {
     setCandidates([]);
     setFailedCandidates([]);
     setSelectedIds([]);
+    setSelectedTransactionTypes({});
     setSaveStatuses({});
     setSaveSummary(null);
 
@@ -513,7 +607,8 @@ export default function GmailSyncPage() {
       return;
     }
 
-    const { data, error } = await getSupabaseClient().auth.getSession();
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.getSession();
     const session = data.session;
 
     if (error || !session) {
@@ -532,6 +627,25 @@ export default function GmailSyncPage() {
       setScanStatus("error");
       return;
     }
+
+    const { data: bankAccounts, error: bankAccountsError } = await supabase
+      .from("bank_accounts")
+      .select("account_number")
+      .eq("user_id", session.user.id);
+
+    if (bankAccountsError) {
+      setErrorMessage(
+        "Không thể tải tài khoản ngân hàng đã lưu. Vui lòng thử lại."
+      );
+      setScanStatus("error");
+      return;
+    }
+
+    const ownAccountNumbers = new Set(
+      ((bankAccounts ?? []) as BankAccount[])
+        .map((account) => normalizeAccountNumber(account.account_number))
+        .filter(Boolean)
+    );
 
     const gmailSearchQuery = buildGmailSearchQuery(
       syncState,
@@ -612,15 +726,22 @@ export default function GmailSyncPage() {
           continue;
         }
 
-        const suggestedCategory = suggestTransactionCategory(parsed);
+        const detection = detectTransactionType(parsed, ownAccountNumbers);
+        const parsedWithDetectedType = {
+          ...parsed,
+          transaction_type: detection.transactionType
+        };
+        const suggestedCategory =
+          suggestTransactionCategory(parsedWithDetectedType);
         const candidate = {
           id: detailData.id ?? message.id,
           subject,
           emailDate,
           rawText,
-          parsed,
+          parsed: parsedWithDetectedType,
           category: null,
-          suggestedCategory
+          suggestedCategory,
+          isTransactionTypeUncertain: detection.isTransactionTypeUncertain
         };
 
         if (parsed.amount) {
@@ -635,7 +756,11 @@ export default function GmailSyncPage() {
 
       setCandidates(parsedCandidates);
       setFailedCandidates(manualCandidates);
-      setSelectedIds(parsedCandidates.map((candidate) => candidate.id));
+      setSelectedIds(
+        parsedCandidates
+          .filter((candidate) => !candidate.isTransactionTypeUncertain)
+          .map((candidate) => candidate.id)
+      );
       setScanStatus(
         parsedCandidates.length || manualCandidates.length ? "success" : "empty"
       );
@@ -648,7 +773,7 @@ export default function GmailSyncPage() {
         last_scan_result_count: listMessages.length,
         updated_at: syncedAt
       };
-      const { error: upsertError } = await getSupabaseClient()
+      const { error: upsertError } = await supabase
         .from("gmail_sync_state")
         .upsert(nextSyncState, { onConflict: "user_id" });
 
@@ -722,6 +847,19 @@ export default function GmailSyncPage() {
       return;
     }
 
+    const uncertainCandidate = selectedCandidates.find(
+      (candidate) =>
+        candidate.isTransactionTypeUncertain &&
+        !selectedTransactionTypes[candidate.id]
+    );
+
+    if (uncertainCandidate) {
+      setSaveErrorMessage(
+        "Vui lòng chọn Chi tiêu hoặc Thu nhập cho giao dịch chưa chắc."
+      );
+      return;
+    }
+
     const configError = getSupabaseConfigError();
 
     if (configError) {
@@ -752,10 +890,8 @@ export default function GmailSyncPage() {
 
     for (const candidate of selectedCandidates) {
       const { parsed } = candidate;
-      const finalCategory = getFinalCategory(
-        candidate.category,
-        candidate.suggestedCategory
-      );
+      const finalTransactionType = getCandidateTransactionType(candidate);
+      const finalCategory = getCandidateFinalCategory(candidate);
 
       if (!parsed.amount) {
         nextStatuses[candidate.id] = "error";
@@ -770,7 +906,7 @@ export default function GmailSyncPage() {
           parsed.transaction_time,
           candidate.emailDate
         ),
-        transaction_type: parsed.transaction_type,
+        transaction_type: finalTransactionType,
         sender_name: parsed.sender_name,
         sender_account: parsed.sender_account,
         receiver_name: parsed.receiver_name,
@@ -983,12 +1119,17 @@ export default function GmailSyncPage() {
                   <ul className="mt-4 space-y-4">
                     {candidates.map((candidate) => {
                       const { parsed } = candidate;
-                      const isSelected = selectedIds.includes(candidate.id);
-                      const saveStatus = saveStatuses[candidate.id];
-                      const finalCategory = getFinalCategory(
-                        candidate.category,
-                        candidate.suggestedCategory
+                      const isTypeChosen = Boolean(
+                        selectedTransactionTypes[candidate.id]
                       );
+                      const canSelectCandidate =
+                        !candidate.isTransactionTypeUncertain || isTypeChosen;
+                      const isSelected =
+                        canSelectCandidate && selectedIds.includes(candidate.id);
+                      const saveStatus = saveStatuses[candidate.id];
+                      const currentTransactionType =
+                        getCandidateTransactionType(candidate);
+                      const finalCategory = getCandidateFinalCategory(candidate);
 
                       return (
                         <li
@@ -1001,7 +1142,7 @@ export default function GmailSyncPage() {
                                 type="checkbox"
                                 checked={isSelected}
                                 onChange={() => toggleCandidate(candidate.id)}
-                                disabled={isSaving}
+                                disabled={isSaving || !canSelectCandidate}
                                 className="h-5 w-5 rounded border-emerald/30 text-emerald accent-emerald"
                               />
                               Chọn
@@ -1014,13 +1155,21 @@ export default function GmailSyncPage() {
                                       {displayValue(parsed.bank_name)}
                                     </span>
                                     <span
-                                      className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${transactionTypeBadgeClass(
-                                        parsed.transaction_type
-                                      )}`}
+                                      className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${
+                                        candidate.isTransactionTypeUncertain &&
+                                        !isTypeChosen
+                                          ? "bg-amber-50 text-amber-700"
+                                          : transactionTypeBadgeClass(
+                                              currentTransactionType
+                                            )
+                                      }`}
                                     >
-                                      {transactionTypeLabel(
-                                        parsed.transaction_type
-                                      )}
+                                      {candidate.isTransactionTypeUncertain &&
+                                      !isTypeChosen
+                                        ? "Chưa chắc"
+                                        : transactionTypeLabel(
+                                            currentTransactionType
+                                          )}
                                     </span>
                                     <span className="w-fit rounded-full bg-leaf px-3 py-1 text-xs font-semibold text-emerald">
                                       {finalCategory}
@@ -1048,6 +1197,38 @@ export default function GmailSyncPage() {
                                   </span>
                                 ) : null}
                               </div>
+
+                              {candidate.isTransactionTypeUncertain ? (
+                                <div className="mt-4 rounded-3xl border border-amber-100 bg-amber-50/70 p-4">
+                                  <p className="text-sm font-semibold text-amber-800">
+                                    Chưa chắc chiều giao dịch. Chọn loại trước
+                                    khi lưu.
+                                  </p>
+                                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                                    {(["expense", "income"] as const).map(
+                                      (transactionType) => (
+                                        <button
+                                          key={transactionType}
+                                          type="button"
+                                          onClick={() =>
+                                            chooseTransactionType(
+                                              candidate.id,
+                                              transactionType
+                                            )
+                                          }
+                                          disabled={isSaving}
+                                          className={`rounded-full border px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${transactionTypeChoiceClass(
+                                            currentTransactionType ===
+                                              transactionType && isTypeChosen
+                                          )}`}
+                                        >
+                                          {transactionTypeLabel(transactionType)}
+                                        </button>
+                                      )
+                                    )}
+                                  </div>
+                                </div>
+                              ) : null}
 
                               <dl className="mt-4 grid gap-3 text-sm text-ink/70 sm:grid-cols-2">
                                 <div>
@@ -1117,7 +1298,7 @@ export default function GmailSyncPage() {
                                     Danh mục gợi ý
                                   </dt>
                                   <dd className="mt-1 break-words">
-                                    {candidate.suggestedCategory}
+                                    {finalCategory}
                                   </dd>
                                 </div>
                                 <div>
