@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { suggestTransactionCategory } from "@/lib/categorization";
 import { getSupabaseClient, getSupabaseConfigError } from "@/lib/supabase";
 import {
   getEffectiveTransactionDate,
@@ -54,6 +55,16 @@ function displayValue(value: string | null) {
   return value?.trim() ? value : "Chưa có";
 }
 
+function isUncategorized(category: string | null) {
+  const normalizedCategory = category?.trim().toLocaleLowerCase("vi-VN");
+
+  return (
+    !normalizedCategory ||
+    normalizedCategory === "chưa có" ||
+    normalizedCategory === "khác"
+  );
+}
+
 function getCurrentMonthValue() {
   return getVietnamMonthValue(new Date()) ?? "";
 }
@@ -98,6 +109,10 @@ export default function TransactionsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isLoginRequired, setIsLoginRequired] = useState(false);
+  const [isAutoCategorizing, setIsAutoCategorizing] = useState(false);
+  const [autoCategorizeMessage, setAutoCategorizeMessage] = useState("");
+  const [autoCategorizeErrorMessage, setAutoCategorizeErrorMessage] =
+    useState("");
 
   useEffect(() => {
     let isCurrentRequest = true;
@@ -350,6 +365,80 @@ export default function TransactionsPage() {
     setTransactionToDelete(null);
   }
 
+  async function handleAutoCategorize() {
+    const shouldAutoCategorize = window.confirm(
+      "Tự phân loại các giao dịch chưa có danh mục?"
+    );
+
+    if (!shouldAutoCategorize) {
+      return;
+    }
+
+    if (!currentUserId) {
+      setAutoCategorizeErrorMessage("Vui lòng đăng nhập để phân loại giao dịch.");
+      return;
+    }
+
+    const targets = filteredTransactions
+      .filter((transaction) => isUncategorized(transaction.category))
+      .map((transaction) => ({
+        transaction,
+        suggestedCategory: suggestTransactionCategory(transaction)
+      }))
+      .filter(({ transaction, suggestedCategory }) => {
+        const currentCategory = transaction.category?.trim();
+
+        return currentCategory !== suggestedCategory;
+      });
+
+    setAutoCategorizeMessage("");
+    setAutoCategorizeErrorMessage("");
+
+    if (targets.length === 0) {
+      setAutoCategorizeMessage("Đã phân loại 0 giao dịch");
+      return;
+    }
+
+    setIsAutoCategorizing(true);
+
+    let updatedCount = 0;
+    const nextTransactions = [...transactions];
+
+    for (const target of targets) {
+      const { error } = await getSupabaseClient()
+        .from("transactions")
+        .update({ category: target.suggestedCategory })
+        .eq("id", target.transaction.id)
+        .eq("user_id", currentUserId);
+
+      if (error) {
+        continue;
+      }
+
+      updatedCount += 1;
+      const transactionIndex = nextTransactions.findIndex(
+        (transaction) => transaction.id === target.transaction.id
+      );
+
+      if (transactionIndex >= 0) {
+        nextTransactions[transactionIndex] = {
+          ...nextTransactions[transactionIndex],
+          category: target.suggestedCategory
+        };
+      }
+    }
+
+    setTransactions(nextTransactions);
+    setAutoCategorizeMessage(`Đã phân loại ${updatedCount} giao dịch`);
+    setAutoCategorizeErrorMessage(
+      updatedCount < targets.length
+        ? "Một số giao dịch chưa phân loại được. Vui lòng thử lại."
+        : ""
+    );
+    setCurrentPage(1);
+    setIsAutoCategorizing(false);
+  }
+
   return (
     <main className="min-h-screen bg-[linear-gradient(135deg,#f0fdf4_0%,#ffffff_48%,#ecfdf5_100%)] px-6 py-8 text-ink sm:py-12">
       <section className="mx-auto max-w-6xl">
@@ -367,6 +456,20 @@ export default function TransactionsPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={handleAutoCategorize}
+                disabled={
+                  isLoading ||
+                  isLoginRequired ||
+                  isAutoCategorizing ||
+                  !currentUserId ||
+                  transactions.length === 0
+                }
+                className="inline-flex w-fit rounded-full border border-emerald/20 bg-white px-5 py-3 text-sm font-semibold text-emerald shadow-sm shadow-emerald-900/5 transition hover:-translate-y-1 hover:border-emerald/35 hover:bg-leaf hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+              >
+                {isAutoCategorizing ? "Đang phân loại..." : "Tự phân loại"}
+              </button>
               <a
                 href="/transactions/import-vietcombank"
                 className="inline-flex w-fit rounded-full border border-emerald/20 bg-white px-5 py-3 text-sm font-semibold text-emerald shadow-sm shadow-emerald-900/5 transition hover:-translate-y-1 hover:border-emerald/35 hover:bg-leaf hover:shadow-md"
@@ -384,6 +487,18 @@ export default function TransactionsPage() {
         </div>
 
         <div className="rounded-[2rem] border border-emerald/10 bg-white/90 p-4 shadow-2xl shadow-emerald-900/10 backdrop-blur sm:p-6">
+          {autoCategorizeMessage ? (
+            <p className="mb-4 rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-3 text-sm font-semibold text-emerald">
+              {autoCategorizeMessage}
+            </p>
+          ) : null}
+
+          {autoCategorizeErrorMessage ? (
+            <p className="mb-4 rounded-3xl border border-amber-100 bg-amber-50 px-5 py-3 text-sm font-semibold text-amber-700">
+              {autoCategorizeErrorMessage}
+            </p>
+          ) : null}
+
           <div>
             {isLoading ? (
               <div className="rounded-3xl border border-emerald/10 bg-leaf/70 px-5 py-10 text-center text-sm font-medium text-emerald">
